@@ -134,7 +134,57 @@ node wasm-probe/nanbox.mjs
 
 ## Files
 
-`native.zig` contains the implementation and three unit tests. It exports widening arithmetic and a borrowed-buffer function with explicit status values. The jank caller currently tests scalar arguments and a 64-bit result. A jank-side borrowed-buffer test remains to be added.
+`native.zig` contains the implementation and three unit tests. It exports widening arithmetic and a borrowed-buffer function with explicit status values. The jank caller tests scalar arguments, a 64-bit result, and the borrowed-buffer cases below.
+
+### Borrowed-buffer FFI
+
+`spike_sum_i32` borrows an aligned array of at least `len` signed 32-bit values
+and a writable signed 64-bit output slot for the duration of the call. The caller
+owns both, keeps them alive during the call, and frees them afterward. Zig does
+not mutate the input or retain either pointer. Null input is permitted only at
+zero length; a null output is always an error. Status 0 writes the sum (zero for
+empty input); status 1 rejects invalid null pointers without changing a valid
+output slot. Status 2 reports signed 64-bit overflow without changing output.
+
+The AI-assisted jank test allocates a `std::vector<std::int32_t>` with `cpp/new`,
+resizes it to four elements, fills it through `cpp/aget` and `cpp/=`, and passes
+`.data()` plus a `cpp/new`-allocated `std::int64_t` output slot. A `finally` block
+uses `cpp/delete` for both allocations, including the vector destructor that
+releases its element storage. No handwritten C++ function implements the test
+or the Zig operation; `cpp/raw` only includes headers and declares the C ABI.
+
+On the Ubuntu 24.04 container and jank package above, `check-jank.sh` returned 0
+with both scalar and `jank -> Zig: borrowed-buffer checks passed` lines in **each
+of JIT and AOT execution**. `check-jank-zig-cpp.sh` also returned 0 with both
+lines after Zig compilation/linking and native execution. Assertions cover:
+
+* `[10 -3 20 15]` returning status 0 and sum 42 twice on the same buffer;
+  all four input elements remain readable and unchanged.
+* Refilling that same buffer with `[1 2 3 4]`, summing it twice to 10, and
+  checking all elements again before caller cleanup.
+* Null and non-null input with length zero, both returning 0 and writing zero.
+* Null input with length one, returning 1 and preserving output sentinel 99;
+  null input/output with length zero, returning 1.
+
+These executions check the listed value and reuse behaviors, not general
+memory safety. No-retention is also supported by inspection of the Zig function,
+which stores no pointers beyond the call; the smoke alone cannot prove it.
+Status 2 is untested: overflowing i64 with i32 elements requires roughly
+`2^32` elements (about 16 GiB), not a practical smoke allocation.
+
+A separate ignored `(assert false "deliberate assertion failure probe")` module
+verified that assertions execute in JIT and AOT. JIT returned 1; AOT printed
+`assertion failed` **but returned 0** with this installed jank. Both native
+scripts therefore require the final scalar and buffer success markers from
+the executable rather than trusting its exit code alone. Probe logs remain in
+`artifacts/logs/buffer-assertion-*.log`.
+
+One interop limitation encountered was
+`(cpp/new (std.vector std.int32_t) (cpp/std.size_t. 4))`: the generated C++ used
+`std::vector<int>{ v3, }` and Zig rejected it with
+`non-constant-expression cannot be narrowed from type 'std::size_t' (aka 'unsigned long') to 'value_type' (aka 'int') in initializer list`.
+Default construction followed by `.resize()` expresses the desired allocation
+through supported jank interop without adding a C++ implementation.
 
 `build.zig` builds static and shared Zig libraries. `jank/src/spike/core.jank` is the Clojure caller. `scripts/` contains the reproduction commands. `wasm-probe/` contains isolated C++ callers, target-header probes and the collector test.
 

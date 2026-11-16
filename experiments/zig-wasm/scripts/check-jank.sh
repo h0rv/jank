@@ -12,4 +12,7 @@ JANK="${JANK:-jank}"
   "$JANK" --module-path src -L "$ROOT/zig-out/lib" -l:spike run-main spike.core
   "$JANK" --module-path src -L "$ROOT/zig-out/lib" -l:spike compile spike.core --name jank-spike
 )
-(cd /tmp && "$ROOT/jank/target/jank-spike")
+mkdir -p artifacts
+(cd /tmp && "$ROOT/jank/target/jank-spike") | tee artifacts/jank-spike-aot.log
+grep -Fxq 'jank -> Zig: scalar and wide result checks passed' artifacts/jank-spike-aot.log
+grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' artifacts/jank-spike-aot.log

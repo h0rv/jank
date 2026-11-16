@@ -8,7 +8,7 @@ Read the complete handoff prompt at [`../../ZIG_WASM_PROMPT.md`](../../ZIG_WASM_
 
 The branch starts at PR #1107 head `43ffa8d0a6bce1c17c552c6d46f4d6486dc304ed`. The PR separates a host compiler from a target static runtime and begins moving compiler configuration into JSON. The upstream PR remains authoritative for its current status.
 
-The experiment uses an installed jank compiler for host code generation and a prebuilt native runtime. It does not build the fork's compiler or runtime. Submodule updates and compiler builds are separate steps.
+The original baseline uses an installed jank compiler for host code generation and a prebuilt native runtime. The separate Linux host-build reproduction below builds this fork's compiler and native static runtime; it does not build a Wasm runtime.
 
 ## Results
 
@@ -131,6 +131,120 @@ zig c++ -target wasm64-freestanding -std=c++20 -O2 -nostdlib \
   wasm-probe/nanbox.cpp -o artifacts/wasm-probe/nanbox64.wasm
 node wasm-probe/nanbox.mjs
 ```
+
+### Linux fork compiler and native cross-mode runtime
+
+This AI-assisted follow-up built the fork based on
+`fc2270a6bd1551b3562d864d8006299e2190b44d` in Ubuntu 24.04 Docker on Linux
+x86_64. No host packages or submodule pins were changed. Build products,
+caches and logs remain under ignored experiment directories.
+
+The build guide says LLVM 22, while `cmake/llvm.cmake` accepts 22 through 23
+(less than 24). `bin/build-clang` pins jank's LLVM fork at
+`e280c5056ed110a11411413da2b76da226f3113b`, branch `jank-snapshot/llvm23`.
+That source build was unnecessary for these native checks: apt.llvm.org's noble
+LLVM/Clang **23.1.6** worked, including CppInterOp and the tests. The package
+version was
+`1:23.1.6~++20261116013850+5b10d2d74929-1~exp1~20261116133903.98`,
+from `https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main`, with RTTI
+enabled. This is a rolling repository: retain this version when reproducing,
+and do not silently substitute another snapshot if unavailable. GCC/libstdc++
+headers were 14.2.0, CMake 3.28.3 and Ninja 1.11.1.
+
+From this experiment directory, the container/toolchain setup is:
+
+```sh
+mkdir -p artifacts/logs
+docker run -d --name jank-host-build \
+  -v "$PWD/../..:/home/ubuntu/repos/jank" \
+  -w /home/ubuntu/repos/jank/experiments/zig-wasm ubuntu:24.04 tail -f /dev/null
+docker exec jank-host-build bash -c '
+  set -euo pipefail
+  apt-get update
+  DEBIAN_FRONTEND=noninteractive apt-get install -y ca-certificates curl gnupg \
+    git build-essential g++-14 cmake ninja-build pkg-config python3 file xz-utils \
+    libssl-dev libdouble-conversion-dev libffi-dev libbz2-dev libboost-all-dev \
+    zlib1g-dev libzstd-dev libxml2-dev libedit-dev
+  curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key | \
+    gpg --dearmor -o /usr/share/keyrings/llvm.gpg
+  echo "deb [signed-by=/usr/share/keyrings/llvm.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-23 main" \
+    > /etc/apt/sources.list.d/llvm.list
+  apt-get update
+  version="1:23.1.6~++20261116013850+5b10d2d74929-1~exp1~20261116133903.98"
+  apt-get install -y "clang-23=$version" "llvm-23-dev=$version" \
+    "libclang-23-dev=$version" "libclang-cpp23-dev=$version" \
+    "clang-tools-23=$version" "lld-23=$version"
+' > artifacts/logs/host-container-setup.log 2>&1
+# Only if the pinned submodules are missing:
+docker exec --user "$(id -u):$(id -g)" jank-host-build \
+  git -C /home/ubuntu/repos/jank submodule update --init --recursive
+for step in host test spike target install target-install target-spike; do
+  docker exec --user "$(id -u):$(id -g)" jank-host-build \
+    bash scripts/build-host-linux.sh "$step" || break
+done
+```
+
+The helper uses six jobs, Release, `/usr/lib/llvm-23`, `jank_test=ON`,
+`artifacts/build-host`, and `artifacts/build-target`. `LLVM_PREFIX` and `JOBS`
+can be overridden. It creates `artifacts/host-resources` links to source,
+headers and host build libraries because a development build outside the usual
+`compiler+runtime/build` otherwise cannot find `clojure.core`. It exports
+`LANG=C.UTF-8 LC_ALL=C.UTF-8`: the original POSIX locale caused
+`lex/unterminated-string` on the Unicode ellipsis in `jank/nrepl/server/util.jank`.
+No compiler source changes were needed. Reusing earlier root-owned outputs also
+required restoring ownership of `.zig-cache`, `zig-out`, `jank/target`, and
+the prior spike logs/output to the bind-mount user. Fresh runs should use the
+same unprivileged UID throughout.
+
+Observed results (`artifacts/logs/host-*.log` and adjacent `.result` files):
+
+| Step | Exit | Evidence / scope |
+| --- | ---: | --- |
+| Host configure | 0 | LLVM/Clang 23.1.6 accepted; final configure 1 s |
+| Host build | 0 | Built `jank`, `jank-phase-1`, runtime archives and `jank-test`; final incremental build 90 s |
+| Tests | 0 | 128/128 doctest cases, 2024/2024 assertions; 868 jank files, 9 skips, 0 failures; 11 s |
+| Spike | 0 | Fork `jank` JIT execution, AOT compilation/link and execution outside source tree; scalar and buffer markers twice; 2 s |
+| Native cross configure | 0 | `jank_cross_compile=ON`, built host **phase-1** compiler, same native target; final configure 1 s |
+| Native cross runtime build | 0 | `jank_standalone_static_lib_phase_2` produced `libjank-static-runtime.a`; 63 s after initial failed attempt |
+| Host install | 0 | Headers, archives and `lib/target_config.json` under `.tools/host-install`; config byte-identical; 1 s |
+| Cross-mode install | 0 | No-op: no `.tools/target-install` created; 0 s |
+| Cross-runtime spike | 0 | Fork-generated C++ compiled/linked by Zig 0.17.1 against the explicit cross-mode archive, then executed; both markers once; 6 s |
+
+Times are per invocation, not a clean-build benchmark. The earlier resource-path
+failure and a 145 s locale-failing retry preceded the final 90 s host build.
+The first test invocation used the wrong working directory (`test/jank` missing);
+the helper now runs tests from `compiler+runtime`. The fork binary identifier was
+`x86_64-pc-linux-gnu-edaf8df469178412f23536c50ca4e8ba799380f7da4ade5aeeafe6208f6bb177`.
+
+**Cross-mode limitations:** first configuring with
+`HOST_COMPILER="$PWD/artifacts/build-host/jank"` succeeded, but its build failed:
+`clang++: error: no such file or directory: '.../build-target/core-libs/_cache/0/clojure/core.cpp'`.
+Phase 2 registers managed core load functions, and the loader takes that path
+instead of generating core C++; switching to the fork-built `jank-phase-1`
+produced the missing files without modifying CMake or compiler sources.
+The helper defaults to phase 1 for `jank_host_compiler`; `HOST_COMPILER` can
+override it. The original diagnostic is retained in
+`host-target-build-phase-2-failure.log`.
+
+Both generated configs record `triple: x86_64-pc-linux-gnu` and
+`clang_bin: /usr/lib/llvm-23/bin/clang++`. Flags include native GCC 14 and LLVM
+23 include paths, `-femulated-tls`, `-fPIC`, and source/build resource paths.
+`aot_flags` also contains the erroneous but nonfatal
+`-Ljank_lib_link_dirs_prop-NOTFOUND` from an unset CMake target property.
+Code inspection shows the JSON triple is **not applied** as `--target`;
+`clang_bin` supplies include/rpath directories but **does not select the invoked
+compiler** (`invoke_clang` calls `find_clang`, using the host configured path).
+`jit_flags`/`aot_flags` are appended to AOT compiler arguments. Runtime library
+search remains relative to the host process/resources, not the target config.
+Install rules are explicitly disabled in cross mode; the ordinary host install
+places JSON at `lib/target_config.json`, not beside the runtime archive.
+The `target-spike` step therefore reuses installed host headers and explicitly
+passes the target archive via the existing Zig C++ check, rather than claiming
+automatic target-config-based runtime selection.
+
+This demonstrates native host/target separation and native execution only.
+It does not test another architecture, the installed compiler's relocatability,
+a complete Wasm runtime, or general collector/FFI memory safety.
 
 ## Files
 

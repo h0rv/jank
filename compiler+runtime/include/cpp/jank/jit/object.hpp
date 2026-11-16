@@ -5,7 +5,9 @@
 
 #include <folly/Synchronized.h>
 
-#include <cpptrace/cpptrace.hpp>
+#ifndef __EMSCRIPTEN__
+  #include <cpptrace/cpptrace.hpp>
+#endif
 
 #include <jtl/option.hpp>
 
@@ -58,5 +60,7 @@ namespace jank::jit
   void install_object_tracking_plugin();
   void register_loaded_object(uptr resource_key, loaded_object const &object);
 
+#ifndef __EMSCRIPTEN__
   cpptrace::stacktrace_frame resolve_materialized_object_frame(cpptrace::stacktrace_frame frame);
+#endif
 }

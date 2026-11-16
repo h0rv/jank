@@ -5,7 +5,9 @@
 #include <cxxabi.h>
 #include <charconv>
 
-#include <cpptrace/basic.hpp>
+#ifndef __EMSCRIPTEN__
+  #include <cpptrace/basic.hpp>
+#endif
 
 #include <jank/gc.hpp>
 #include <jank/runtime/core.hpp>
@@ -1332,7 +1334,9 @@ namespace jank::runtime
   ex_info(jtl::immutable_string const &message, object_ref const data, object_ref const cause)
   {
     auto const ret{ make_box<obj::exception_info>(message, data) };
+#ifndef __EMSCRIPTEN__
     ret->raw_trace = std::make_unique<cpptrace::raw_trace>(cpptrace::generate_raw_trace());
+#endif
     if(cause.is_some())
     {
       ret->cause = try_object<obj::exception_info>(cause);

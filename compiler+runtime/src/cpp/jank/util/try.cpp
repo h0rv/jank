@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <regex>
 
-#include <cpptrace/from_current.hpp>
-#include <cpptrace/formatting.hpp>
+#ifndef __EMSCRIPTEN__
+  #include <cpptrace/from_current.hpp>
+  #include <cpptrace/formatting.hpp>
+#endif
 
 #include <jank/util/try.hpp>
 #include <jank/util/fmt/print.hpp>
@@ -14,6 +16,7 @@
 
 namespace jank::util
 {
+#ifndef __EMSCRIPTEN__
   /* Returns true if a frame should be kept. This allows us to trim out some pipework
    * at the start/end of each stack trace. */
   static bool filter_frame(cpptrace::stacktrace_frame const &frame)
@@ -142,9 +145,13 @@ namespace jank::util
 
     return resolved;
   }
+#endif
 
   static void print_exception(jtl::immutable_string const &message)
   {
+#ifdef __EMSCRIPTEN__
+    util::println(stderr, "{}\nStack traces are unsupported on Emscripten.", message);
+#else
     static native_set<jtl::immutable_string> const core_libs{
       "clojure_core",
       "clojure_core_reducers",
@@ -203,6 +210,7 @@ namespace jank::util
 
     print_exception(err);
     print_exception_stack_trace(trace);
+#endif
   }
 
   void print_exception(std::exception const &e)
@@ -240,6 +248,7 @@ namespace jank::util
      * compilation will not have exceptions. So this helps keep our
      * compiler error output cleaner, since the stack trace isn't
      * actually going to provide any useful info. */
+#ifndef __EMSCRIPTEN__
     jtl::ptr<error::base> original{ e };
     auto const *deepest_trace{ original->trace.get() };
     while(original->cause)
@@ -254,6 +263,9 @@ namespace jank::util
     {
       print_exception_stack_trace(*deepest_trace);
     }
+#else
+    util::println(stderr, "Stack traces are unsupported on Emscripten.");
+#endif
   }
 
   void print_current_exception()

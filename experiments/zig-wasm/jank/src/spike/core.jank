@@ -1,0 +1,11 @@
+(ns spike.core)
+
+;; These are declarations, not a C++ implementation. The implementation is Zig.
+(cpp/raw "extern \"C\" long long spike_add(int, int);")
+
+(defn -main [& _]
+  (let [answer (cpp/spike_add (cpp/int. 20) (cpp/int. 22))
+        wide (cpp/spike_add (cpp/int. 2147483647) (cpp/int. 2147483647))]
+    (assert (= 42 answer))
+    (assert (= 4294967294 wide))
+    (println "jank -> Zig: scalar and wide result checks passed")))

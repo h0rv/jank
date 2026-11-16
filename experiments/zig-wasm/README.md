@@ -56,6 +56,57 @@ The native generated-C++ script is specific to the tested Homebrew package layou
 
 The header probe downloads exact pinned source files. It verifies expected compiler rejections. A synthetic Unix macro isolates the wasm64 pointer checks; it does not port the platform.
 
+### Linux
+
+The three jank-dependent checks also passed on Linux x86_64 in an Ubuntu 24.04
+container, using the local Zig 0.17.1 and Node 26.13.1 downloads. The PPA's
+`dists/jammy/main/binary-amd64/Packages.gz` returned HTTP 404. Its noble package
+requires newer glibc/libstdc++ than the Ubuntu 22.04 host, so it was unpacked
+locally rather than installed on the host:
+
+* Package: `https://ppa.jank-lang.org/pool/main/j/jank/jank_0.1-noble_amd64.deb`
+* SHA-256: `95c564ef43c6dc096b6c35a8f0a7c2c1a4391158e523d536fc0d636853a13edf`
+* `print-binary-version`: `x86_64-unknown-linux-gnu-cf627abb22b776c8ebbb6caee09f4f22fe25a16e33827b2ccc2eb155085e5e68`
+
+With the package already extracted at `.tools/jank` using `dpkg-deb -x`, the
+following reproduces the container setup and checks from this directory. The
+existing local Emscripten 7.0.0 SDK from the GC bootstrap is reused. Package
+installation occurs only inside the disposable container.
+
+```sh
+docker run --rm -v "$PWD/../..:/home/ubuntu/repos/jank" \
+  -w /home/ubuntu/repos/jank/experiments/zig-wasm ubuntu:24.04 bash -c '
+  mkdir -p artifacts/logs
+  apt-get update > artifacts/logs/linux-container-setup.log 2>&1 &&
+  DEBIAN_FRONTEND=noninteractive apt-get install -y gcc g++-14 libxml2 \
+    libzstd1 zlib1g libbz2-1.0 libboost-dev curl git xz-utils file \
+    ca-certificates python3 >> artifacts/logs/linux-container-setup.log 2>&1 || exit $?
+  export PATH="$PWD/.tools/node-v26.13.1-linux-x64/bin:$PATH"
+  export ZIG="$PWD/.tools/zig-x86_64-linux-0.17.1/zig"
+  export ZIG_GLOBAL_CACHE_DIR="$PWD/.zig-cache/global" TMPDIR="$PWD/artifacts"
+  export JANK="$PWD/.tools/jank/usr/local/bin/jank"
+  export JANK_RUNTIME_DIR="$PWD/.tools/jank/usr/local/lib/jank/0.1"
+  failed=0
+  for name in check-jank check-jank-zig-cpp check-jank-wasm-object; do
+    bash "scripts/$name.sh" > "artifacts/logs/linux-$name.log" 2>&1
+    rc=$?
+    echo "$rc" > "artifacts/logs/linux-$name.exit"
+    [ "$rc" -eq 0 ] || failed=1
+  done
+  exit "$failed"
+'
+```
+
+All three returned 0. `check-jank.sh` executed the scalar/wide-result assertions
+through JIT and an AOT executable. `check-jank-zig-cpp.sh` compiled and linked
+the generated application with Zig and executed it outside the source directory;
+on Linux it uses GCC 14 headers and libstdc++/libgcc matching this package,
+not Zig's libc++. The macOS library selection is unchanged.
+`check-jank-wasm-object.sh` compiled the actual generated module to a wasm64
+object with Emscripten and Wasm exceptions; it did not link or execute it.
+These AI-assisted reproduction results do not establish a full jank Wasm runtime
+or collector correctness for jank's tagged references.
+
 Bootstrap the separate collector experiment locally:
 
 ```sh

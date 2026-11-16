@@ -246,6 +246,115 @@ This demonstrates native host/target separation and native execution only.
 It does not test another architecture, the installed compiler's relocatability,
 a complete Wasm runtime, or general collector/FFI memory safety.
 
+### wasm64 target-runtime blocker probe
+
+This AI-assisted attempt starts from the Linux host-build branch at
+`5e5fa76e48a41485cf1be6b8f93413baad570a33`. It reuses that Ubuntu 24.04
+container, native `artifacts/build-host/jank-phase-1`, and the local Emscripten
+7.0.0 SDK documented in `wasm-probe/GC.md`. It does **not** produce a complete
+target runtime archive, linked application, or Wasm execution result.
+
+From the experiment directory in the existing container setup:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh deps
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh configure
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh build
+```
+
+The helper uses `emcmake`, its genuine Emscripten toolchain and compiler wrappers,
+`-sMEMORY64=1 -fwasm-exceptions` for C/C++ and executable linking, Release,
+`jank_cross_compile=ON`, `jank_emulated_tls=OFF`, `enable_threads=OFF`, six jobs,
+and `--target jank_standalone_static_lib_phase_2 -- -k 0`. There is no `-pthread`,
+Unix/Linux macro injection, fake platform implementation or no-op unwinder.
+`EMSDK` and `JOBS` can override the SDK directory and parallelism. Logs/results
+are `artifacts/logs/wasm64-*`; builds are in `artifacts/build-wasm64`.
+
+**Configure:** the unmodified project stopped with `Unsupported OS: Emscripten`.
+Two small CMake changes allow useful diagnostics without claiming platform
+support: select wasm-ld's supported `--whole-archive`/`--no-whole-archive`
+switches, and do not re-inject Emscripten's implicit include list as explicit
+standard includes. That list puts C headers before libc++ and caused widespread
+`<cstddef> ... didn't find libc++'s <stddef.h>` errors. The compiler itself
+provides the correct implicit order. Other platforms retain their existing path.
+
+Cpptrace's automatic configuration then stopped with
+`No unwinding back-end seems to be supported, stack tracing will not work`.
+For **diagnostic collection only**, the helper explicitly selects its real
+`CPPTRACE_UNWIND_WITH_UNWIND=ON` implementation, despite the failed availability
+probe. This permits generation of build rules and preserves compile-time errors;
+it does not supply a working unwinder. `CPPTRACE_UNWIND_WITH_NOTHING` is not used.
+PCH is disabled using CMake's standard option so a single failed PCH cannot hide
+all runtime translation units.
+
+Required ZLIB/Boost discovery initially failed. `deps` builds Emscripten's
+memory64 zlib 1.3.2 port and installs its Boost 1.83.0 headers. Header-only links
+under `.tools/wasm64-headers` avoid explicitly adding the entire sysroot C-header
+directory ahead of libc++. These are target SDK dependencies, not host archives.
+
+**Host leakage:** the project still discovers native LLVM/Clang 23.1.6 at
+`/usr/lib/llvm-23` and appends its include directory globally. To satisfy the
+native LLVM package's exported `zstd::libzstd_shared` dependency, configuration
+uses host zstd's package config with `CMAKE_FIND_PACKAGE_PREFER_CONFIG=ON` and
+package root searching set to BOTH. This imports a native library; it must not
+be used in a real Wasm link. Libdwarf's generated compile command demonstrably
+contains `-isystem /usr/include` and reads host libc headers (see table).
+The generated JSON also retains `-L/usr/lib/llvm-23/lib`, its `c++`/`unwind`
+subdirectories, host resource links, and `-Ljank_lib_link_dirs_prop-NOTFOUND`.
+Its Clang major macro says 23 while the target SDK resource directory is Clang
+24. Its recorded triple is **wasm32-unknown-emscripten**, because the triple query
+does not pass memory64 flags. Actual compilation does pass memory64: predefined
+macros show `__wasm64__`, `__SIZEOF_POINTER__=8`, and Wasm exception handling.
+Emscripten itself defines `__unix__`; the experiment does not add it.
+
+**Compile:** final configure returned 0 in 4 s, and the final keep-going build
+returned 1 in 83 s. Host core generation succeeded (16 generated C++ files),
+and all 16 core modules compiled into Wasm objects. All 11 selected Folly
+sources compiled and `libfolly.a` was archived. Immer-using runtime files,
+terminal code, the static-runtime implementation, zip and nanobench also
+compiled. These are compile/archive observations, not runtime correctness tests.
+
+The table counts **113 failed object compilation edges by first diagnostic**
+in the final build, not 113 independent root causes. Secondary errors and
+masked failures are not added to the counts. Full commands and diagnostics are
+retained in `wasm64-build.log`; the enumerated outputs/diagnostics are also in
+the ignored `wasm64-failures.json` analysis output.
+
+| File or dependency | Count | First diagnostic | Category |
+| --- | ---: | --- | --- |
+| `src/cpp/jank/util/environment.cpp:112`, `process_path()` | 1 | `static assertion failed: Unsupported platform` | Missing process/filesystem platform implementation |
+| `include/cpp/jank/runtime/core.hpp:186` via core/module/sequence/object sources and `clojure/string_native.cpp` | 10 | `no type named 'delay_ref' in namespace 'jank::runtime::obj'` | Missing direct declaration exposed without PCH; not demonstrated Wasm-specific |
+| `src/cpp/jank/aot/target_config.cpp` | 1 | `no member named 'format' in namespace 'jank::util'` | Missing direct include exposed without PCH; not demonstrated Wasm-specific |
+| Pinned bdwgc C sources (`alloc.c`, `allchblk.c`, etc.) | 20 | `64-bit WebAssembly is not yet supported` | Collector target configuration |
+| Cpptrace binary/platform/unwind/symbol sources | 29 | `"Unexpected platform"` | Stack-trace platform layer; masks real unwind API compilation |
+| Cpptrace's fetched libdwarf sources | 52 | `'bits/libc-header-start.h' file not found` from `/usr/include/{stdint,stdlib,string}.h` | Host-header contamination |
+
+By category: platform/stack traces **30**, non-PCH include/declaration issues
+**11**, collector **20**, host-header contamination **52**. No Folly/Immer
+threading-header failure was observed with this SDK; that is not evidence their
+synchronization works at runtime. The project still injects `-DGC_THREADS` into
+236 compile-database commands despite `enable_threads=OFF` and zero `-pthread`
+commands. That inconsistent runtime/collector contract is unresolved; no
+thread-capable runtime or collector is claimed. Terminal code compiled, but
+TTY/filesystem behavior was not executed. The reachable `process_path()`
+implementation has no Emscripten case and fails explicitly rather than returning
+a fake native path.
+
+**Collector backport assessment:** upstream
+`3f4e077edb2496bfd14e625f3a440f38caac458a` changes one header (6 additions,
+5 deletions), replacing the wasm64 rejection/32-bit word-size definition with
+conditional 64/32-bit word size. `git apply --check` succeeds against the pinned
+`327ef1f8c80a611b2f8b915850c8b2fd38e6595e`. This is a small mechanical backport
+candidate, but it was **not applied** and the pin remains unchanged. It does not
+resolve the separate `GC_THREADS` restriction or expose Wasm local roots; the
+root-discovery limitations in `wasm-probe/GC.md` remain.
+
+**Link/execution:** neither final archive merging nor application linking was
+reached; `libjank-static-runtime.a` does not exist in this build. No application
+or collector was executed. Native regression configure/build remained successful
+(`ninja: no work to do.`), and the native tests still reported 128/128 cases,
+2024/2024 assertions, 868 jank files with 9 skips and 0 failures.
+
 ## Files
 
 `native.zig` contains the implementation and three unit tests. It exports widening arithmetic and a borrowed-buffer function with explicit status values. The jank caller tests scalar arguments, a 64-bit result, and the borrowed-buffer cases below.

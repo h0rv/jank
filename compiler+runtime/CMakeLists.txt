@@ -73,7 +73,7 @@ set(jank_cxx_standard cxx_std_20)
 #   ${jank_link_whole_start} jank_common_lib ${jank_link_whole_end}
 #   ${jank_link_whole_start} nanobench_lib ${jank_link_whole_end}
 #
-if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux" OR ${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
   set(jank_link_whole_start "-Wl,--whole-archive")
   set(jank_link_whole_end "-Wl,--no-whole-archive")
 elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
@@ -251,7 +251,9 @@ include(cmake/sanitization.cmake)
 set(CMAKE_EXPORT_COMPILE_COMMANDS on)
 # Also include the system includes in the compile_commands.json so that weird
 # systems like NixOS can have tooling work properly.
-set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+if(NOT EMSCRIPTEN)
+  set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+endif()
 
 # ---- Clang/LLVM ----
 include(cmake/llvm.cmake)

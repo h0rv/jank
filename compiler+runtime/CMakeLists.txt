@@ -110,7 +110,7 @@ set(
   -std=gnu++20
   -DJANK_VERSION="${jank_version}"
   -DJANK_CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
-  -DGC_THREADS -DPOINTER_MASK=0x0000FFFFFFFFFFFF
+  -DPOINTER_MASK=0x0000FFFFFFFFFFFF
   -DIMMER_HAS_LIBGC=1 -DIMMER_TAGGED_NODE=0 -DHAVE_CXX14=1
   -DCPPINTEROP_USE_REPL
   -DFOLLY_HAVE_JEMALLOC=0 -DFOLLY_HAVE_TCMALLOC=0 -DFOLLY_ASSUME_NO_JEMALLOC=1 -DFOLLY_ASSUME_NO_TCMALLOC=1
@@ -121,6 +121,10 @@ set(
 if(jank_emulated_tls)
   # https://groups.google.com/g/llvm-dev/c/W-OweiAjDcU?pli=1
   list(APPEND jank_common_compiler_flags -femulated-tls)
+endif()
+
+if(NOT DEFINED enable_threads OR enable_threads)
+  list(APPEND jank_common_compiler_flags -DGC_THREADS)
 endif()
 
 if (WIN32)

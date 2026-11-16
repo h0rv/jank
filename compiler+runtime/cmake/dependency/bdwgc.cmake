@@ -28,7 +28,17 @@ set(CMAKE_CXX_CLANG_TIDY_OLD ${CMAKE_CXX_CLANG_TIDY})
 
   set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -DPOINTER_MASK=0x0000FFFFFFFFFFFF")
   set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPOINTER_MASK=0x0000FFFFFFFFFFFF")
-  add_subdirectory(third-party/bdwgc EXCLUDE_FROM_ALL)
+  if(EMSCRIPTEN)
+    set(bdwgc_source_dir "${CMAKE_BINARY_DIR}/bdwgc-source")
+    file(COPY "${PROJECT_SOURCE_DIR}/third-party/bdwgc/" DESTINATION "${bdwgc_source_dir}" PATTERN ".git" EXCLUDE)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" apply --unsafe-paths "${CMAKE_CURRENT_LIST_DIR}/bdwgc-wasm64.patch"
+      WORKING_DIRECTORY "${bdwgc_source_dir}"
+      COMMAND_ERROR_IS_FATAL ANY)
+    add_subdirectory("${bdwgc_source_dir}" third-party/bdwgc EXCLUDE_FROM_ALL)
+  else()
+    add_subdirectory(third-party/bdwgc EXCLUDE_FROM_ALL)
+  endif()
 
   unset(GC_BUILD_SHARED_LIBS)
   unset(enable_cplusplus)

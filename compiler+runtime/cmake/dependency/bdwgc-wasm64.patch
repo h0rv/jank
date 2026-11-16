@@ -1,0 +1,19 @@
+Backport of bdwgc 3f4e077edb2496bfd14e625f3a440f38caac458a (Ali Kamarainen).
+AI-assisted integration; only the wasm64 word-size configuration is changed.
+diff --git a/include/private/gcconfig.h b/include/private/gcconfig.h
+--- a/include/private/gcconfig.h
++++ b/include/private/gcconfig.h
+@@ -2596,10 +2596,11 @@
+ #ifdef WEBASSEMBLY
+ #  define MACH_TYPE "WEBASSEMBLY"
+-#  if defined(__wasm64__) && !defined(CPPCHECK)
+-#    error 64-bit WebAssembly is not yet supported
++#  if defined(__wasm64__)
++#    define CPP_WORDSZ 64
++#  else
++#    define CPP_WORDSZ 32
+ #  endif
+-#  define CPP_WORDSZ 32
+ /*
+  * Emscripten does emulate `mmap` and `munmap`, but those should not be
+  * used in the collector, since WebAssembly lacks the native support of

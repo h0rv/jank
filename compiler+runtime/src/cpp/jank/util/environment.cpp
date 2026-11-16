@@ -4,6 +4,7 @@
 #endif
 
 #include <filesystem>
+#include <stdexcept>
 
 #include <jank/util/environment.hpp>
 #include <jank/util/fmt.hpp>
@@ -84,7 +85,9 @@ namespace jank::util
 
   jtl::immutable_string process_path()
   {
-#if defined(__APPLE__)
+#if defined(__EMSCRIPTEN__)
+    throw std::runtime_error{ "Executable paths are unavailable on Emscripten" };
+#elif defined(__APPLE__)
     u32 path_length{};
     if(_NSGetExecutablePath(nullptr, &path_length) != -1 || path_length <= 1)
     {

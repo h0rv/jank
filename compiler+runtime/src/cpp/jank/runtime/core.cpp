@@ -1090,6 +1090,10 @@ namespace jank::runtime
 
   obj::future_ref future(object_ref const fn)
   {
+#ifndef GC_THREADS
+    static_cast<void>(fn);
+    throw std::runtime_error{ "Futures require a thread-enabled runtime" };
+#else
     auto const bindings{ __rt_ctx->get_thread_bindings() };
     auto const ret{ make_box<obj::future>() };
     /* The future hangs onto its function to keep it alive. */
@@ -1169,6 +1173,7 @@ namespace jank::runtime
       }
     } };
     return ret;
+#endif
   }
 
   void cancel_future(obj::future_ref const future)

@@ -1120,7 +1120,9 @@ extern "C"
      * like strings, use the GC for allocations. It can still be configured later. */
     GC_set_all_interior_pointers(1);
     GC_init();
+#ifdef GC_THREADS
     GC_allow_register_threads();
+#endif
 
     {
       GC_word bm[GC_BITMAP_SIZE(jank::runtime::obj::persistent_string)]{ 0 };

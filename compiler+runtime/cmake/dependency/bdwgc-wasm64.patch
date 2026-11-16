@@ -3,7 +3,18 @@ AI-assisted integration; only the wasm64 word-size configuration is changed.
 diff --git a/include/private/gcconfig.h b/include/private/gcconfig.h
 --- a/include/private/gcconfig.h
 +++ b/include/private/gcconfig.h
-@@ -2596,10 +2596,11 @@
+@@ -652,8 +652,8 @@
+  *   - `TILEGX`: Tilera TILE-Gx 32/64-bit (running `LINUX`);
+  *   - `TILEPRO`: Tilera TILEPro (running `LINUX`);
+  *   - `VAX`: DEC VAX (running `BSD`, `ULTRIX`);
+- *   - `WEBASSEMBLY`: WebAssembly/Wasm (running `EMSCRIPTEN` environment,
+- *     `WASI` environment);
++ *   - `WEBASSEMBLY`: WebAssembly/Wasm 32/64-bit (running `EMSCRIPTEN`
++ *     environment, `WASI` environment);
+  *   - `X86_64`: AMD x86-64 ILP32/64-bit (running `COSMO` environment,
+  *     `CYGWIN` environment, `DARWIN` (macOS), `FREEBSD`, `HAIKU`, `HURD`,
+  *     `LINUX`, `MSWIN32`, `MSWIN_XBOX1`, `NETBSD`, `OPENBSD`,
+@@ -2626,9 +2626,10 @@
  #ifdef WEBASSEMBLY
  #  define MACH_TYPE "WEBASSEMBLY"
 -#  if defined(__wasm64__) && !defined(CPPCHECK)

@@ -1,5 +1,6 @@
 #include <jank/error/aot.hpp>
 #include <jank/util/environment.hpp>
+#include <jank/util/fmt.hpp>
 #include <jank/aot/target_config.hpp>
 
 #include <filesystem>

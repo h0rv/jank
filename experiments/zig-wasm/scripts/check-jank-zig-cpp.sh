@@ -2,15 +2,17 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
+APP="${JANK_ZIG_APP:-$ROOT}"
 ZIG="${ZIG:-zig}"
 JANK="${JANK:-jank}"
 RUNTIME="${JANK_RUNTIME_DIR:-/opt/homebrew/opt/jank/lib/jank/0.1}"
 OUT="$ROOT/artifacts/jank-zig-cpp"
 mkdir -p "$OUT"
-"$ZIG" build -Doptimize=ReleaseSafe
+(cd "$APP" && "$ZIG" build -Doptimize=ReleaseSafe --prefix "$ROOT/zig-out" \
+  --cache-dir "$ROOT/.zig-cache")
 VERSION="$("$JANK" print-binary-version)"
 (
-  cd jank
+  cd "$APP/jank"
   "$JANK" --module-path src -L "$ROOT/zig-out/lib" -l:spike \
     --output-target cpp compile-module spike.core
   JANK_PRINT_CODEGEN=1 "$JANK" --module-path src -L "$ROOT/zig-out/lib" \
@@ -43,7 +45,7 @@ fi
   -DFOLLY_ASSUME_NO_JEMALLOC=1 -DFOLLY_ASSUME_NO_TCMALLOC=1 \
   -DJANK_VERSION='"jank-0.1-alpha"' -I "$RUNTIME/include" \
   -Wno-deprecated-literal-operator -Wno-return-type-c-linkage \
-  -c "jank/target/_cache/$VERSION/spike/core.cpp" -o "$OUT/core.o"
+  -c "$APP/jank/target/_cache/$VERSION/spike/core.cpp" -o "$OUT/core.o"
 # Use the installed runtime's C++ standard library rather than Zig's libc++.
 "$ZIG" c++ -std=c++20 -O2 -femulated-tls -nostdlib++ \
   "${cpp_flags[@]}" \

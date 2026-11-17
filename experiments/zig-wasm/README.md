@@ -49,6 +49,63 @@ The GC experiment pins Emscripten 7.0.0 and Boehm commit `91f30f37b0457566e9823b
 
 ## Run the checks
 
+### One command: native + Wasm
+
+This AI-assisted Linux x86_64 research wrapper builds the same jank and Zig
+sources for both targets from the host shell:
+
+```sh
+cd experiments/zig-wasm
+./jank-zig build
+./jank-zig check
+./jank-zig run native       # Ubuntu 24.04 executable, run in the container
+./jank-zig run node
+./jank-zig run browser      # opens Chrome; keeps its local server running
+./jank-zig serve            # http://127.0.0.1:8765/; Ctrl-C to stop
+```
+
+`build [app-dir]` defaults to this experiment. An alternative app directory
+must contain `native.zig` and `jank/src/spike/core.jank`, with namespace
+`spike.core`, entry point `-main`, the same Zig C ABI and success markers.
+An optional `build.zig` can customize the Zig library build (library name
+`spike`); otherwise the default is reused. This is a spike-layout driver, not
+a general project/package format. Sources are copied into ignored staging
+before compilation; input directories are not modified.
+
+Outputs are `artifacts/app/native/spike` and
+`artifacts/app/wasm/{spike.js,spike.wasm,index.html}`. The native executable
+contains the static jank runtime, but still needs Ubuntu 24.04-compatible
+system libraries; it is not a statically linked portable Linux binary.
+The Wasm JS defaults to continuous-GC mode, including when invoked directly
+with Node. The page displays stdout and sets `data-status="pass"` on the root
+element and a PASS title only after all 20 marker pairs and final GC-enabled
+completion. `check` requires native, Node and headless Chrome success and
+prints a verdict table. Logs and browser DOM evidence are in
+`artifacts/logs/app/`. `serve --port N` selects another port.
+
+Docker, Python 3, curl, tar, Git and (for browser commands) `google-chrome`
+must already be available on the host. The wrapper creates/starts the
+`jank-host-build` Ubuntu 24.04 container, installs its documented pinned LLVM
+23.1.6 dependencies **inside the container only**, downloads local Zig
+0.17.1/Node 26.13.1/Emscripten 7.0.0, initializes pinned submodules, and builds
+missing host/native/Wasm runtime artifacts and the private patched Binaryen.
+Existing prerequisites are reused; app outputs are rebuilt each invocation.
+If compiler/runtime sources change, explicitly refresh the prerequisite builds
+with the research helpers. No global SDKs are installed or replaced. Downloads,
+builds, staging, Chrome profile and logs stay in the ignored experiment dirs.
+The pinned apt snapshot must remain available for a fresh bootstrap; failures
+are reported rather than silently upgrading it.
+
+The wrapper hides Emscripten flags, memory64, Wasm exceptions, static-root
+registration and the post-link spill transform. **This remains the experimental
+spill/static-root path: ordinary startup still fails.** The collector follow-up
+below adds flattening and private exception-edge spill cleanup, but general
+exception-storage ownership remains unresolved outside its test harness.
+Passing this bounded application is not general GC safety or supported
+Wasm/browser portability. A memory64- and Wasm-exception-capable browser is
+required (the tested Chrome 156 has both). No threads, DOM/fetch application
+API or general browser platform layer is supplied.
+
 Run these commands from this directory. Put the pinned Zig version, Node and a compatible jank on PATH. `mise exec -- bash ...` can supply the pinned Zig version.
 
 ```sh

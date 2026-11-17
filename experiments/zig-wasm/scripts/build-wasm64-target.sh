@@ -3,6 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
+APP="${JANK_ZIG_APP:-$ROOT}"
+export JANK_ZIG_APP="$APP"
 SOURCE="$(cd ../.. && pwd)/compiler+runtime"
 SDK="${EMSDK:-$ROOT/.tools/gc-wasm/emsdk}"
 BITS="${WASM_BITS:-64}"
@@ -37,7 +39,7 @@ generate_spike() {
   export JANK_RUNTIME_DIR="$ROOT/artifacts/host-resources"
   mkdir -p "$SPIKE"
   (
-    cd jank || exit
+    cd "$APP/jank" || exit
     "$host" --module-path src -L "$ROOT/zig-out/lib" -l:spike \
       --output-target cpp compile-module spike.core || exit
     JANK_PRINT_CODEGEN=1 "$host" --module-path src -L "$ROOT/zig-out/lib" -l:spike \
@@ -141,9 +143,10 @@ PY
     fi
     run "$variant-generate" generate_spike
     run "$variant-compile" python3 - "$ROOT" "$variant" <<'PY'
-import json, pathlib, shlex, subprocess, sys
+import json, os, pathlib, shlex, subprocess, sys
 root = pathlib.Path(sys.argv[1])
 out = root / 'artifacts/wasm64-spike'
+app = pathlib.Path(os.environ['JANK_ZIG_APP'])
 build = root / 'artifacts/build-wasm64'
 variant = sys.argv[2]
 database = json.loads((build / 'compile_commands.json').read_text())
@@ -158,7 +161,7 @@ for arg in args:
 version = (out / 'host-version').read_text().strip()
 objects = []
 sources = [(out / 'main.cpp', 'main', ['-Dmain=jank_spike_main']),
-           (root / f'jank/target/_cache/{version}/spike/core.cpp', 'core', []),
+           (app / f'jank/target/_cache/{version}/spike/core.cpp', 'core', []),
            (root / 'wasm-probe/startup-driver.cpp', 'driver', ['-DJANK_STARTUP_SPIKE_ONLY'])]
 for source, label, extra in sources:
     obj = out / f'{variant}-{label}.o'
@@ -166,13 +169,14 @@ for source, label, extra in sources:
                    cwd=entry['directory'], check=True)
     objects.append(str(obj))
 subprocess.run([str(root / '.tools/zig-x86_64-linux-0.17.1/zig'), 'build-obj',
-                str(root / 'native.zig'), '-target', 'wasm64-freestanding', '-O', 'ReleaseSafe',
+                str(app / 'native.zig'), '-target', 'wasm64-freestanding', '-O', 'ReleaseSafe',
                 f'-femit-bin={out / (variant + "-zig.o")}',
                 '--cache-dir', str(root / '.zig-cache'),
                 '--global-cache-dir', str(root / '.zig-cache/global')], check=True)
 subprocess.run([flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1', '-fwasm-exceptions',
                 '-sALLOW_MEMORY_GROWTH=1',
                 *(['-sSTACK_SIZE=4194304'] if variant == 'startup-spill' else []),
+                *(['-sEXIT_RUNTIME=1'] if os.environ.get('JANK_ZIG_APP_MODE') == '1' else []),
                 *objects, str(out / (variant + '-zig.o')),
                 str(build / 'libjank-static-runtime.a'), '-Wl,--error-limit=0',
                 '-o', str(out / (variant + '.js'))], check=True)

@@ -38,6 +38,11 @@ class Project:
     zig: pathlib.Path | None
     expectations: dict[str, tuple[str, ...]]
     wasm_check: str
+    libraries: tuple[str, ...] = ()
+    include_dirs: tuple[pathlib.Path, ...] = ()
+    native_link_flags: tuple[str, ...] = ()
+    wasm_link_flags: tuple[str, ...] = ()
+    frame: str | None = None
 
     @property
     def out(self):
@@ -90,7 +95,57 @@ def load_project(directory=ROOT):
     mode = data.get('wasm_check', 'single')
     if mode not in ('single', 'spike-continuous'):
         raise RuntimeError('wasm_check must be single or spike-continuous')
-    return Project(root, name, main, jank, zig, expectations, mode)
+    def strings(value, label):
+        if not isinstance(value, list) or any(not isinstance(x, str) or not x or '\x00' in x for x in value):
+            raise RuntimeError(f'{label} must be a list of nonempty strings')
+        return tuple(value)
+
+    libraries = strings(data.get('libraries', []), 'libraries')
+    if any(library != 'raylib' for library in libraries) or len(set(libraries)) != len(libraries):
+        raise RuntimeError('libraries supports raylib once only')
+    includes = []
+    for value in strings(data.get('include_dirs', []), 'include_dirs'):
+        path = (root / value).resolve()
+        if not path.is_dir():
+            raise RuntimeError(f'Invalid include directory: {value}')
+        includes.append(path)
+    link_flags = {}
+    for target in ('native', 'wasm'):
+        options = data.get(target, {})
+        if not isinstance(options, dict):
+            raise RuntimeError(f'{target} must be an object')
+        link_flags[target] = strings(options.get('link_flags', []), f'{target}.link_flags')
+    frame = data.get('frame')
+    if 'frame' in data and (not isinstance(frame, str) or not re.fullmatch(
+            r'[A-Za-z_][A-Za-z0-9_.-]*/[A-Za-z_][A-Za-z0-9_!?+.*-]*', frame)):
+        raise RuntimeError('frame must be a qualified ns/fn var')
+    if frame and mode != 'single':
+        raise RuntimeError('frame cannot be combined with spike-continuous')
+    return Project(root, name, main, jank, zig, expectations, mode, libraries,
+                   tuple(includes), link_flags['native'], link_flags['wasm'], frame)
+
+
+@dataclass(frozen=True)
+class CDependencies:
+    include_dirs: tuple[pathlib.Path, ...] = ()
+    archives: tuple[pathlib.Path, ...] = ()
+    link_flags: tuple[str, ...] = ()
+
+    def include_flags(self):
+        return [flag for directory in self.include_dirs for flag in ('-I', directory)]
+
+
+def c_dependencies(project, platform):
+    includes = list(project.include_dirs)
+    archives = []
+    flags = list(project.native_link_flags if platform == 'native' else project.wasm_link_flags)
+    if 'raylib' in project.libraries:
+        output = ROOT / 'artifacts/raylib' / ('native' if platform == 'native' else 'wasm64')
+        includes.append(output / 'include')
+        archives.extend(output / 'lib' / f'lib{library}.a' for library in ('raygui', 'raylib'))
+        flags[:0] = (['-lGL', '-lm', '-lpthread', '-ldl', '-lrt', '-lX11'] if platform == 'native'
+                     else ['-sUSE_GLFW=3', '-sMAX_WEBGL_VERSION=2'])
+    return CDependencies(tuple(includes), tuple(archives), tuple(flags))
 
 
 def command(args, **kwargs):
@@ -206,6 +261,9 @@ def build(app):
     if project.root.is_relative_to(OUT):
         raise RuntimeError('Project sources must be outside artifacts/app')
     for platform in ('native', 'wasm'):
+        for library in project.libraries:
+            logged(f'{project.name}-{platform}-{library}', ['bash', ROOT / 'scripts' / f'build-{library}.sh',
+                   'native' if platform == 'native' else 'wasm64'])
         stage = project.out / f'stage-{platform}'
         if stage.exists():
             shutil.rmtree(stage)
@@ -241,6 +299,11 @@ def generate_sources(project, stage, platform, prefix, run):
              host, '--reader-feature', platform,
              '--module-path', stage / project.jank.relative_to(project.root),
              '--target-dir', stage / 'target']
+    flags.extend(c_dependencies(project, platform).include_flags())
+    host_deps = c_dependencies(project, 'native')
+    flags.extend(f'-l{archive}' for archive in host_deps.archives)
+    if 'raylib' in project.libraries:
+        flags.extend(['-lGL', '-lm', '-lpthread', '-ldl', '-lrt', '-lX11'])
     if project.zig is not None:
         flags.extend(['-L', prefix / 'lib', f'-l:{project.name}'])
     run('modules', [*flags, '--output-target', 'cpp', 'compile-module', project.main], cwd=stage)
@@ -265,6 +328,7 @@ def container_output(*args):
 
 
 def build_native(project, stage, prefix, modules, launcher, run):
+    deps = c_dependencies(project, 'native')
     runtime = ROOT / '.tools/host-install/lib/jank/0.1'
     stdlib = pathlib.Path(container_output('g++-14', '-print-file-name=libstdc++.so'))
     include = stdlib.parent / '../../../../include'
@@ -278,7 +342,7 @@ def build_native(project, stage, prefix, modules, launcher, run):
              '-DFOLLY_HAVE_TCMALLOC=0', '-DFOLLY_ASSUME_NO_JEMALLOC=1',
              '-DFOLLY_ASSUME_NO_TCMALLOC=1', '-DJANK_VERSION="jank-0.1-alpha"',
              '-I', runtime / 'include', '-Wno-deprecated-literal-operator',
-             '-Wno-return-type-c-linkage']
+             '-Wno-return-type-c-linkage', *deps.include_flags()]
     objects = []
     for index, source in enumerate(modules):
         obj = stage / f'module-{index}.o'
@@ -290,6 +354,7 @@ def build_native(project, stage, prefix, modules, launcher, run):
     libraries = [prefix / 'lib' / f'lib{project.name}.a'] if project.zig is not None else []
     run('link', [*flags, '-nostdlib++', launcher, *objects, *libraries,
                 ROOT / 'artifacts/build-target/libjank-static-runtime.a',
+                *deps.archives, *deps.link_flags,
                 f'-L{gcc}', stdlib, container_output('g++-14', '-print-file-name=libgcc_s.so'),
                 '-o', output])
 
@@ -307,12 +372,18 @@ def wasm_compile_flags(database):
 
 
 def build_wasm(project, stage, modules, launcher, run):
+    deps = c_dependencies(project, 'wasm')
     target = ROOT / 'artifacts/build-wasm64'
     flags, cwd = wasm_compile_flags(json.loads((target / 'compile_commands.json').read_text()))
+    flags.extend(deps.include_flags())
     sources = [(launcher, ['-Dmain=jank_project_main']), *[(module, []) for module in modules],
                (ROOT / 'wasm-probe/startup-driver.cpp', ['-DJANK_STARTUP_SPIKE_ONLY',
                  '-DJANK_ENTRY_LAUNCHER=jank_project_main',
                  f'-DJANK_ENTRY_NS="{project.main}"', '-DJANK_ENTRY_FN="-main"'])]
+    if project.frame:
+        namespace, function = project.frame.split('/')
+        sources[-1] = (ROOT / 'scripts/frame-driver.cpp',
+                       [f'-DJANK_FRAME_NS="{namespace}"', f'-DJANK_FRAME_FN="{function}"'])
     objects = []
     for index, (source, extra) in enumerate(sources):
         obj = stage / f'module-{index}.o'
@@ -328,15 +399,18 @@ def build_wasm(project, stage, modules, launcher, run):
     output.mkdir(parents=True, exist_ok=True)
     js = output / f'{project.name}.js'
     run('link', [flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1',
-                '-fwasm-exceptions', '-sALLOW_MEMORY_GROWTH=1', '-sEXIT_RUNTIME=1',
+                '-fwasm-exceptions', '-sALLOW_MEMORY_GROWTH=1',
+                f'-sEXIT_RUNTIME={0 if project.frame else 1}',
                 '-sSTACK_SIZE=4194304',
-                *objects, target / 'libjank-static-runtime.a', '-Wl,--error-limit=0', '-o', js])
+                *objects, target / 'libjank-static-runtime.a', *deps.archives, *deps.link_flags,
+                '-Wl,--error-limit=0', '-o', js])
     run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm')])
     arguments = ['continuous', '20'] if project.wasm_check == 'spike-continuous' else ['static-roots']
     js.write_text("var Module = typeof Module !== 'undefined' ? Module : {};\n"
                   f'Module.arguments ??= {json.dumps(arguments)};\n' + js.read_text())
     config = json.dumps({'expect': project.expected('browser'), 'arguments': arguments,
                          'continuous': project.wasm_check == 'spike-continuous',
+                         'frame': project.frame,
                          'script': js.name}).replace('<', '\\u003c')
     page = (ROOT / 'scripts/app-index.html').read_text().replace('__PROJECT_CONFIG__', config)
     (output / 'index.html').write_text(page)

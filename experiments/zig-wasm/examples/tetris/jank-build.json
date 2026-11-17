@@ -1,0 +1,7 @@
+{
+  "name": "tetris",
+  "main": "tetris.main",
+  "libraries": ["raylib"],
+  "frame": "tetris.main/frame",
+  "expect": ["tetris: initialized"]
+}

@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- AI-assisted private local probe; not a public deployment. -->
+<html data-status="running" lang="en">
+<meta charset="utf-8"><title>raylib + raygui memory64 probe</title>
+<canvas id="canvas" width="480" height="250" tabindex="0"></canvas><pre id="output"></pre>
+<script>
+const output = document.getElementById('output');
+window.probeErrors = [];
+function fail(error) {
+  probeErrors.push(String(error));
+  output.textContent += String(error) + '\n';
+  document.documentElement.dataset.status = 'fail';
+}
+window.addEventListener('error', e => fail(e.message));
+window.addEventListener('unhandledrejection', e => fail(e.reason));
+window.probeFrame = (frames, keys, clicks) => {
+  if (frames < 5) return;
+  const gl = Module.canvas.getContext('webgl2') || Module.canvas.getContext('webgl');
+  const pixel = new Uint8Array(4);
+  gl.readPixels(30, 220, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
+  window.probeState = {frames, keys, clicks, pixel: [...pixel], glError: gl.getError()};
+  document.documentElement.dataset.frames = frames;
+};
+var Module = {
+  canvas: document.getElementById('canvas'),
+  print: text => { console.log(text); output.textContent += text + '\n'; },
+  printErr: text => { console.error(text); output.textContent += text + '\n'; },
+  onAbort: fail
+};
+</script><script src="probe.js"></script></html>

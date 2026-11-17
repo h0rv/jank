@@ -4,10 +4,21 @@
 <meta charset="utf-8">
 <title>jank: running</title>
 <h1>jank (experimental wasm64)</h1>
+<canvas id="canvas" width="1280" height="800" tabindex="0" hidden></canvas>
 <pre id="app"></pre>
 <pre id="stdout"></pre>
 <script>
   const config = __PROJECT_CONFIG__;
+  const canvas = document.getElementById('canvas');
+  canvas.hidden = !config.frame;
+  if (config.frame) {
+    canvas.style.maxWidth = '100%';
+    canvas.addEventListener('click', () => canvas.focus());
+    canvas.addEventListener('keydown', event => {
+      if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) event.preventDefault();
+    });
+    canvas.focus();
+  }
   const output = document.getElementById('stdout');
   const lines = [];
   function write(line) {
@@ -21,11 +32,13 @@
   window.addEventListener('error', event => { write(event.message); finish(false); });
   window.addEventListener('unhandledrejection', event => { write(event.reason); finish(false); });
   var Module = {
+    canvas,
     arguments: config.arguments,
     print: write,
     printErr: line => { console.error(line); },
     onAbort: reason => { write(reason); finish(false); },
     onExit: status => {
+      if (config.frame) { finish(false); return; }
       const count = marker => lines.filter(line => line === marker).length;
       const allLines = [...lines, ...document.getElementById('app').textContent.split('\n')];
       finish(status === 0 && config.expect.every(line => allLines.includes(line)) &&

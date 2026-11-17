@@ -1,0 +1,28 @@
+<!doctype html>
+<!-- AI-assisted research fork site. -->
+<html lang="en" data-status="running">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jank-wasm · live AOT example</title>
+<link rel="stylesheet" href="style.css">
+<main>
+  <header><a href="index.html">jank-wasm</a><nav><a href="try.html">Try it in the browser →</a></nav></header>
+  <p class="eyebrow">Pure jank · compiled ahead of time</p>
+  <h1>A small Clojure program.<br>A real Wasm run.</h1>
+  <p class="intro">This page runs <code>examples/hello-cljc</code>: three jank namespaces computing the weighted sum of <code>[1 2 3 4]</code>. No Zig library or JVM is involved in this example.</p>
+  <section class="terminal" aria-label="Live example output">
+    <div class="terminal-bar"><span>hello-cljc / browser</span><strong id="status" role="status">Loading Wasm…</strong></div>
+    <pre id="app" aria-live="polite"></pre>
+    <details><summary>Runtime diagnostics</summary><pre id="stdout"></pre></details>
+  </section>
+  <noscript><p>This live example needs JavaScript and a memory64-capable browser.</p></noscript>
+  <p class="hint">Requires memory64 and Wasm exceptions. Chrome works; Safari likely will not. <a href="try.html">Requirements and build instructions →</a></p>
+  <section class="about"><h2>A research fork, not a portability promise.</h2>
+    <p>This is an AI-assisted research fork of <a href="https://github.com/jank-lang/jank">jank</a>, exploring an experimental wasm64 / Emscripten AOT pipeline. It is <strong>not general jank Wasm support</strong> and this is <strong>not a browser REPL</strong>: the program was compiled before deployment.</p>
+    <p>The demo uses explicit static roots and a private Binaryen spill transform. Ordinary unrooted startup still fails; general GC safety and exception-storage ownership remain unresolved.</p>
+    <p><a href="https://github.com/h0rv/jank-wasm">Fork source ↗</a> · <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Experiment evidence and limitations ↗</a></p>
+  </section>
+  <footer>AI-assisted research and site. Kept in this fork, not submitted upstream.</footer>
+</main>
+<script src="runner.js"></script>
+</html>

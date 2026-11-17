@@ -1,6 +1,6 @@
 # Wasm GC versus jank's current collector
 
-AI-assisted research for h0rv/jank only; no upstream submission. Inspected `main`
+AI-assisted research for h0rv/jank-wasm only; no upstream submission. Inspected `main`
 at `0573e30c02f19cba9db406876d76ee1fadf02dc9`; remote
 `research/zig-wasm` is `a2f9916517d67860bce2978bd5d97914d80d7d44`.
 Stayed on main as requested. No commits or pushes. Read AGENTS.md,

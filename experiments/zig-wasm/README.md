@@ -50,6 +50,19 @@ The GC experiment pins Emscripten 7.0.0 and Boehm commit `91f30f37b0457566e9823b
 
 ## Run the checks
 
+### Fork Pages site
+
+The AI-assisted research site at <http://horv.co/jank-wasm/> runs the pure-jank
+`hello-cljc` AOT example live, not a browser REPL. From this directory, run
+`bash scripts/build-pages.sh` to build the example and assemble the static site
+in ignored `artifacts/pages/jank-wasm/`. It includes the site sources from
+`site/`, `hello.js`, `hello.wasm` and `.nojekyll`, but no unspilled diagnostic
+binary or CNAME. Internal links/assets are relative for the `/jank-wasm/` prefix.
+Serve `artifacts/pages/` locally and open `/jank-wasm/` to check before publishing.
+Publish only the assembled directory's contents at the root of `gh-pages`, in a
+new commit preserving that branch's history; the script does not push. The
+memory64, Wasm exception and experimental rooting limitations below still apply.
+
 ### One command: native + Wasm
 
 This AI-assisted Linux x86_64 research wrapper builds the same jank sources

@@ -57,6 +57,8 @@ for native and Wasm from the host shell. Zig is an optional native-library
 input, not what enables the Wasm build: Emscripten's Clang/LLVM compiles and
 links jank's generated C++ and runtime for Wasm.
 
+See [Using Zig with jank](ZIG.md) for library integration and measured toolchain trade-offs.
+
 ```sh
 cd experiments/zig-wasm
 ./jank-build build

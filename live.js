@@ -1,5 +1,17 @@
 var Module = typeof Module !== 'undefined' ? Module : {};
 Module.arguments ??= ["static-roots"];
+// This code implements the `-sMODULARIZE` settings by taking the generated
+// JS program code (INNER_JS_CODE) and wrapping it in a factory function.
+
+// Single threaded MINIMAL_RUNTIME programs do not need access to
+// document.currentScript, so a simple export declaration is enough.
+var createLive = (() => {
+  // When MODULARIZE this JS may be executed later,
+  // after document.currentScript is gone, so we save it.
+  // In EXPORT_ES6 mode we can just use 'import.meta.url'.
+  var _scriptName = globalThis.document?.currentScript?.src;
+  return async function(moduleArg = {}) {
+    var Module = moduleArg;
 // include: shell.js
 // include: minimum_runtime_check.js
 // end include: minimum_runtime_check.js
@@ -16,7 +28,6 @@ Module.arguments ??= ["static-roots"];
 // after the generated code, you will need to define   var Module = {};
 // before the code. Then that object will be used in the code, and you
 // can continue to use Module afterwards as well.
-var Module = typeof Module !== 'undefined' ? Module : {};
 
 // Determine the runtime environment we are in. You can customize this by
 // setting the ENVIRONMENT setting at compile time (see settings.js).
@@ -38,10 +49,6 @@ var thisProgram = './this.program';
 var quit_ = (status, toThrow) => {
   throw toThrow;
 };
-
-// In MODULARIZE mode _scriptName needs to be captured already at the very top of the page immediately when the page is parsed, so it is generated there
-// before the page load. In non-MODULARIZE modes generate it here.
-var _scriptName = globalThis.document?.currentScript?.src;
 
 if (typeof __filename !== 'undefined') { // Node
   _scriptName = __filename;
@@ -90,11 +97,6 @@ readAsync = async (filename, binary = true) => {
   }
 
   programArgs = process.argv.slice(2);
-
-  // MODULARIZE will export the module in the proper place outside, we don't need to export here
-  if (typeof module !== 'undefined') {
-    module['exports'] = Module;
-  }
 
   quit_ = (status, toThrow) => {
     process.exitCode = status;
@@ -221,8 +223,6 @@ var isFileURI = (filename) => filename.startsWith('file://');
 
 var runtimeInitialized = false;
 
-var runtimeExited = false;
-
 
 
 // When ALLOW_MEMORY_GROWTH is enabled, the conversion from Wasm
@@ -243,7 +243,7 @@ function updateMemoryViews() {
   HEAP32 = new Int32Array(b);
   HEAPU32 = new Uint32Array(b);
   
-  
+  HEAPF64 = new Float64Array(b);
   HEAP64 = new BigInt64Array(b);
   HEAPU64 = new BigUint64Array(b);
 }
@@ -276,15 +276,6 @@ TTY.init();
   FS.ignorePermissions = false;
   // End ATPOSTCTORS hooks
 
-}
-
-function exitRuntime() {
-  ___funcs_on_exit(); // Native atexit() functions
-  // Begin ATEXITS hooks
-  FS.quit();
-TTY.shutdown();
-  // End ATEXITS hooks
-  runtimeExited = true;
 }
 
 function postRun() {
@@ -342,7 +333,7 @@ function abort(what) {
 var wasmBinaryFile;
 
 function findWasmBinary() {
-  return locateFile('hello.wasm');
+  return locateFile('live.wasm');
 }
 
 function getBinarySync(file) {
@@ -487,7 +478,7 @@ async function createWasm() {
   var onPreRuns = [];
   var addOnPreRun = (cb) => onPreRuns.push(cb);
 
-  var noExitRuntime = false;
+  var noExitRuntime = true;
 
   const FS_MAX_OPEN_FDS = 4096;
   var FS_createDataFile = (...args) => FS.createDataFile(...args);
@@ -2695,7 +2686,6 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
   quit() {
         FS.initialized = false;
         // force-flush all streams, so we get musl std streams printed out
-        _fflush(0);
         // close all of our streams
         for (var stream of FS.streams) {
           if (stream) {
@@ -3437,6 +3427,44 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
       return 0;
     ;
   }
+  /** @type {!Float64Array} */
+  var HEAPF64;
+  var readEmAsmArgsArray = [];
+  var readEmAsmArgs = (sigPtr, buf) => {
+      readEmAsmArgsArray.length = 0;
+      var ch;
+      // Most arguments are i32s, so shift the buffer pointer so it is a plain
+      // index into HEAP32.
+      while (ch = HEAPU8[sigPtr++]) {
+        // Floats are always passed as doubles, so all types except for 'i'
+        // are 8 bytes and require alignment.
+        var wide = (ch != 105);
+        buf += wide && (buf % 8) ? 4 : 0;
+        readEmAsmArgsArray.push(
+          // Special case for pointers under wasm64 or CAN_ADDRESS_2GB mode.
+          ch == 112 ? Number(HEAPU64[((buf)/8)]) :
+          ch == 106 ? HEAP64[((buf)/8)] :
+          ch == 105 ?
+            HEAP32[((buf)/4)] :
+            HEAPF64[((buf)/8)]
+        );
+        buf += wide ? 8 : 4;
+      }
+      return readEmAsmArgsArray;
+    };
+  var runEmAsmFunction = (code, sigPtr, argbuf) => {
+      var args = readEmAsmArgs(sigPtr, argbuf);
+      return ASM_CONSTS[code](...args);
+    };
+  function _emscripten_asm_const_int(code, sigPtr, argbuf) {
+    code = bigintToI53Checked(code);
+    sigPtr = bigintToI53Checked(sigPtr);
+    argbuf = bigintToI53Checked(argbuf);
+  
+  
+      return runEmAsmFunction(code, sigPtr, argbuf);
+    ;
+  }
   var getHeapMax = () =>
       2147483648;
   var _emscripten_get_heap_max = () => BigInt(getHeapMax());;
@@ -3505,6 +3533,294 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
       return false;
     ;
   }
+  var wasmTableMirror = [];
+  var getWasmTableEntry = (funcPtr) => {
+      // Function pointers should show up as numbers, even under wasm64, but
+      // we still have some places where bigint values can flow here.
+      // https://github.com/emscripten-core/emscripten/issues/18200
+      funcPtr = Number(funcPtr);
+      var func = wasmTableMirror[funcPtr];
+      if (!func) {
+        /** @suppress {checkTypes} */
+        wasmTableMirror[funcPtr] = func = wasmTable.get(BigInt(funcPtr));
+      }
+      return func;
+    };
+  var handleException = (e) => {
+      // Certain exception types we do not treat as errors since they are used for
+      // internal control flow.
+      // 1. ExitStatus, which is thrown by exit()
+      // 2. "unwind", which is thrown by emscripten_unwind_to_js_event_loop() and others
+      //    that wish to return to JS event loop.
+      if (e instanceof ExitStatus || e == 'unwind') {
+        return EXITSTATUS;
+      }
+      quit_(1, e);
+    };
+  var runtimeKeepaliveCounter = 0;
+  var keepRuntimeAlive = () => noExitRuntime || runtimeKeepaliveCounter > 0;
+  var _proc_exit = (code) => {
+      EXITSTATUS = code;
+      if (!keepRuntimeAlive()) {
+        Module['onExit']?.(code);
+        ABORT = true;
+      }
+      quit_(code, new ExitStatus(code));
+    };
+  /** @param {boolean|number=} implicit */
+  var exitJS = (status, implicit) => {
+      EXITSTATUS = status;
+  
+      _proc_exit(status);
+    };
+  var maybeExit = () => {
+      if (!keepRuntimeAlive()) {
+        try {
+          _exit(EXITSTATUS);
+        } catch (e) {
+          handleException(e);
+        }
+      }
+    };
+  var callUserCallback = (func, ...args) => {
+      if (ABORT) {
+        return;
+      }
+      try {
+        return func(...args);
+      } catch (e) {
+        handleException(e);
+      } finally {
+        maybeExit();
+      }
+    };
+  var _emscripten_set_main_loop_timing = (mode, value) => {
+      MainLoop.timingMode = mode;
+      MainLoop.timingValue = value;
+  
+      if (!MainLoop.func) {
+        return 1; // Return non-zero on failure, can't set timing mode when there is no main loop.
+      }
+  
+      if (mode == 0) {
+        MainLoop.scheduler = function MainLoop_scheduler_setTimeout() {
+          var timeUntilNextTick = Math.max(0, MainLoop.tickStartTime + value - _emscripten_get_now())|0;
+          setTimeout(MainLoop.runner, timeUntilNextTick); // doing this each time means that on exception, we stop
+        };
+      } else if (mode == 1) {
+        MainLoop.scheduler = function MainLoop_scheduler_rAF() {
+          MainLoop.requestAnimationFrame(MainLoop.runner);
+        };
+      } else {
+        if (!MainLoop.setImmediate) {
+          if (globalThis.scheduler) {
+            // Some modern browsers implement scheduler.postTask, but not all.
+            MainLoop.setImmediate = scheduler.postTask.bind(scheduler);
+          } else if (globalThis.setImmediate) {
+            MainLoop.setImmediate = setImmediate;
+          } else {
+            // Emulate setImmediate. (note: not a complete polyfill, we don't emulate clearImmediate() to keep code size to minimum, since not needed)
+            var setImmediates = [];
+            var emscriptenMainLoopMessageId = 'setimmediate';
+            /** @param {Event} event */
+            var MainLoop_setImmediate_messageHandler = (event) => {
+              if (event.data === emscriptenMainLoopMessageId) {
+                event.stopPropagation();
+                setImmediates.shift()();
+              }
+            };
+            addEventListener('message', MainLoop_setImmediate_messageHandler, true);
+            MainLoop.setImmediate = /** @type{function(function(): ?, ...?): number} */((func) => {
+              setImmediates.push(func);
+              if (ENVIRONMENT_IS_WORKER) {
+                // The postMessge API in a Worker, sends message to the main
+                // thread and does not support the `targetOrigin` (*) argument.
+                postMessage(emscriptenMainLoopMessageId);
+              } else {
+                postMessage(emscriptenMainLoopMessageId, '*');
+              }
+            });
+          }
+        }
+        MainLoop.scheduler = function MainLoop_scheduler_setImmediate() {
+          MainLoop.setImmediate(MainLoop.runner);
+        };
+      }
+      return 0;
+    };
+  var MainLoop = {
+  func:null,
+  scheduler:null,
+  currentlyRunningMainloop:0,
+  arg:0,
+  timingMode:0,
+  timingValue:0,
+  currentFrameNumber:0,
+  queue:[],
+  preMainLoop:[],
+  postMainLoop:[],
+  pause() {
+        if (MainLoop.scheduler) {
+          MainLoop.scheduler = null;
+          // Incrementing this signals the previous main loop that it's now become old, and it must return.
+          MainLoop.currentlyRunningMainloop++;
+          
+        }
+      },
+  resume() {
+        MainLoop.currentlyRunningMainloop++;
+        var timingMode = MainLoop.timingMode;
+        var timingValue = MainLoop.timingValue;
+        var func = MainLoop.func;
+        MainLoop.func = null;
+        // do not set timing and call scheduler, we will do it on the next lines
+        setMainLoop(func, 0, false, MainLoop.arg, true);
+        _emscripten_set_main_loop_timing(timingMode, timingValue);
+        MainLoop.scheduler();
+      },
+  updateStatus() {
+        if (Module['setStatus']) {
+          var message = Module['statusMessage'] || 'Please wait...';
+          var remaining = MainLoop.remainingBlockers ?? 0;
+          var expected = MainLoop.expectedBlockers ?? 0;
+          if (remaining) {
+            if (remaining < expected) {
+              Module['setStatus'](`${message} (${expected - remaining}/${expected})`);
+            } else {
+              Module['setStatus'](message);
+            }
+          } else {
+            Module['setStatus']('');
+          }
+        }
+      },
+  init() {
+      },
+  runIter(func) {
+        if (ABORT) return;
+        for (var pre of MainLoop.preMainLoop) {
+          if (pre() === false) {
+            return; // |return false| skips a frame
+          }
+        }
+        callUserCallback(func);
+        for (var post of MainLoop.postMainLoop) {
+          post();
+        }
+      },
+  nextRAF:0,
+  fakeRequestAnimationFrame(func) {
+        // try to keep 60fps between calls to here
+        var now = Date.now();
+        if (!MainLoop.nextRAF) {
+          MainLoop.nextRAF = now + 1000/60;
+        } else {
+          while (now + 2 >= MainLoop.nextRAF) { // fudge a little, to avoid timer jitter causing us to do lots of delay:0
+            MainLoop.nextRAF += 1000/60;
+          }
+        }
+        var delay = Math.max(MainLoop.nextRAF - now, 0);
+        setTimeout(func, delay);
+      },
+  requestAnimationFrame(func) {
+        if (globalThis.requestAnimationFrame) {
+          requestAnimationFrame(func);
+        } else {
+          MainLoop.fakeRequestAnimationFrame(func);
+        }
+      },
+  };
+  
+    /**
+   * @param {number=} arg
+   * @param {boolean=} noSetTiming
+   */
+  var setMainLoop = (iterFunc, fps, simulateInfiniteLoop, arg, noSetTiming) => {
+      MainLoop.func = iterFunc;
+      MainLoop.arg = arg;
+  
+      var thisMainLoopId = MainLoop.currentlyRunningMainloop;
+      function checkIsRunning() {
+        if (thisMainLoopId < MainLoop.currentlyRunningMainloop) {
+          maybeExit();
+          return false;
+        }
+        return true;
+      }
+  
+      // We create the loop runner here but it is not actually running until
+      // _emscripten_set_main_loop_timing is called (which might happen at a
+      // later time).
+      MainLoop.runner = function MainLoop_runner() {
+        if (ABORT) return;
+        if (MainLoop.queue.length > 0) {
+          var start = Date.now();
+          var blocker = MainLoop.queue.shift();
+          blocker.func(blocker.arg);
+          if (MainLoop.remainingBlockers) {
+            var remaining = MainLoop.remainingBlockers;
+            var next = remaining%1 == 0 ? remaining-1 : Math.floor(remaining);
+            if (blocker.counted) {
+              MainLoop.remainingBlockers = next;
+            } else {
+              // not counted, but move the progress along a tiny bit
+              next = next + 0.5; // do not steal all the next one's progress
+              MainLoop.remainingBlockers = (8*remaining + next)/9;
+            }
+          }
+          MainLoop.updateStatus();
+  
+          // catches pause/resume main loop from blocker execution
+          if (!checkIsRunning()) return;
+  
+          setTimeout(MainLoop.runner, 0);
+          return;
+        }
+  
+        // catch pauses from non-main loop sources
+        if (!checkIsRunning()) return;
+  
+        // Implement very basic swap interval control
+        MainLoop.currentFrameNumber = MainLoop.currentFrameNumber + 1 | 0;
+        if (MainLoop.timingMode == 1 && MainLoop.timingValue > 1 && MainLoop.currentFrameNumber % MainLoop.timingValue != 0) {
+          // Not the scheduled time to render this frame - skip.
+          MainLoop.scheduler();
+          return;
+        } else if (MainLoop.timingMode == 0) {
+          MainLoop.tickStartTime = _emscripten_get_now();
+        }
+  
+        MainLoop.runIter(iterFunc);
+  
+        // catch pauses from the main loop itself
+        if (!checkIsRunning()) return;
+  
+        MainLoop.scheduler();
+      }
+  
+      if (!noSetTiming) {
+        if (fps > 0) {
+          _emscripten_set_main_loop_timing(0, 1000.0 / fps);
+        } else {
+          // Do rAF by rendering each frame (no decimating)
+          _emscripten_set_main_loop_timing(1, 1);
+        }
+  
+        MainLoop.scheduler();
+      }
+  
+      if (simulateInfiniteLoop) {
+        throw 'unwind';
+      }
+    };
+  function _emscripten_set_main_loop(func, fps, simulateInfiniteLoop) {
+    func = bigintToI53Checked(func);
+  
+  
+      var iterFunc = getWasmTableEntry(func);
+      setMainLoop(iterFunc, fps, simulateInfiniteLoop);
+    ;
+  }
   var ENV = {
   };
   var getExecutableName = () => thisProgram;
@@ -3568,26 +3884,7 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
       return 0;
     ;
   }
-  var runtimeKeepaliveCounter = 0;
-  var keepRuntimeAlive = () => noExitRuntime || runtimeKeepaliveCounter > 0;
-  var _proc_exit = (code) => {
-      EXITSTATUS = code;
-      if (!keepRuntimeAlive()) {
-        Module['onExit']?.(code);
-        ABORT = true;
-      }
-      quit_(code, new ExitStatus(code));
-    };
-  /** @param {boolean|number=} implicit */
-  var exitJS = (status, implicit) => {
-      EXITSTATUS = status;
-  
-      if (!keepRuntimeAlive()) {
-        exitRuntime();
-      }
-  
-      _proc_exit(status);
-    };
+
   function _fd_close(fd) {
   try {
   
@@ -3743,17 +4040,7 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
   return randomFill(HEAPU8.subarray(buffer, buffer + size));
   }
 
-  var handleException = (e) => {
-      // Certain exception types we do not treat as errors since they are used for
-      // internal control flow.
-      // 1. ExitStatus, which is thrown by exit()
-      // 2. "unwind", which is thrown by emscripten_unwind_to_js_event_loop() and others
-      //    that wish to return to JS event loop.
-      if (e instanceof ExitStatus || e == 'unwind') {
-        return EXITSTATUS;
-      }
-      quit_(1, e);
-    };
+
   var stackAlloc = (sz) => __emscripten_stack_alloc(sz);
   var stringToUTF8OnStack = (str) => {
       var size = lengthBytesUTF8(str) + 1;
@@ -3763,11 +4050,18 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
     };
 
 
+
+
   var _exit = exitJS;
   
   FS.createPreloadedFile = FS_createPreloadedFile;
   FS.preloadFile = FS_preloadFile;
   FS.staticInit();;
+  
+      Module['requestAnimationFrame'] = MainLoop.requestAnimationFrame;
+      Module['pauseMainLoop'] = MainLoop.pause;
+      Module['resumeMainLoop'] = MainLoop.resume;
+      MainLoop.init();;
 // End JS library code
 
 // include: postlibrary.js
@@ -3804,34 +4098,37 @@ if (Module['printErr']) err = Module['printErr'];
 
 // end include: postlibrary.js
 
-function hello_emit(text) { const line = UTF8ToString(Number(text)); if (typeof document !== 'undefined') { document.getElementById('app').textContent += line + '\n'; } else { console.log(line); } }
-function hello_browser() { return typeof document !== 'undefined' ? 1 : 0; }
+var ASM_CONSTS = {
+  574412: () => { const n = Module.jankCollectEvery ?? 1; return Number.isInteger(n) && n >= 1 && n <= 60 ? n : 1; },  
+ 574513: ($0, $1, $2, $3, $4) => { Module.jankFrameStats = ({frames: Number($0), collections: Number($1), heap: Number($2), used: Number($3), memory: HEAPU8.buffer.byteLength, time: performance.now(), collectEvery: $4}); Module.onJankFrame?.(Module.jankFrameStats); }
+};
+function live_input_size() { const text = Module.liveInput; return typeof text === 'string' ? lengthBytesUTF8(text) : -1; }
+function live_input_copy(out,size) { stringToUTF8(Module.liveInput, Number(out), size + 1); Module.liveInput = null; }
+function live_show(text) { Module.onLiveLine?.(UTF8ToString(Number(text))); }
+function live_finish(text) { Module.onLiveFinish?.(UTF8ToString(Number(text))); }
 
 // Imports from the Wasm binary.
 var __ZN5folly15SharedMutexImplILb0EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj,
   __ZN5folly15SharedMutexImplILb1EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj,
   _main,
-  _fflush,
-  ___funcs_on_exit,
   _emscripten_builtin_memalign,
   ___trap,
   __emscripten_stack_alloc,
   memory,
   __indirect_function_table,
-  wasmMemory;
+  wasmMemory,
+  wasmTable;
 
 
 function assignWasmExports(wasmExports) {
   __ZN5folly15SharedMutexImplILb0EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj = Module['__ZN5folly15SharedMutexImplILb0EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj'] = wasmExports['_ZN5folly15SharedMutexImplILb0EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj'];
   __ZN5folly15SharedMutexImplILb1EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj = Module['__ZN5folly15SharedMutexImplILb1EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj'] = wasmExports['_ZN5folly15SharedMutexImplILb1EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj'];
   _main = Module['_main'] = wasmExports['__main_argc_argv'];
-  _fflush = wasmExports['fflush'];
-  ___funcs_on_exit = wasmExports['__funcs_on_exit'];
   _emscripten_builtin_memalign = wasmExports['emscripten_builtin_memalign'];
   ___trap = wasmExports['__trap'];
   __emscripten_stack_alloc = wasmExports['_emscripten_stack_alloc'];
   memory = wasmMemory = wasmExports['memory'];
-  __indirect_function_table = wasmExports['__indirect_function_table'];
+  __indirect_function_table = wasmTable = wasmExports['__indirect_function_table'];
 }
 
 var wasmImports = {
@@ -3856,11 +4153,15 @@ var wasmImports = {
   /** @export */
   clock_time_get: _clock_time_get,
   /** @export */
+  emscripten_asm_const_int: _emscripten_asm_const_int,
+  /** @export */
   emscripten_get_heap_max: _emscripten_get_heap_max,
   /** @export */
   emscripten_get_now: _emscripten_get_now,
   /** @export */
   emscripten_resize_heap: _emscripten_resize_heap,
+  /** @export */
+  emscripten_set_main_loop: _emscripten_set_main_loop,
   /** @export */
   environ_get: _environ_get,
   /** @export */
@@ -3878,9 +4179,13 @@ var wasmImports = {
   /** @export */
   fd_write: _fd_write,
   /** @export */
-  hello_browser,
+  live_finish,
   /** @export */
-  hello_emit,
+  live_input_copy,
+  /** @export */
+  live_input_size,
+  /** @export */
+  live_show,
   /** @export */
   random_get: _random_get
 };
@@ -3891,14 +4196,12 @@ var wasmImports = {
 // passes.
 function applySignatureConversions(wasmExports) {
   var makeWrapper___PP = (f) => (a0, a1, a2) => f(a0, BigInt(a1 ? a1 : 0), BigInt(a2 ? a2 : 0));
-  var makeWrapper__p = (f) => (a0) => f(BigInt(a0));
   var makeWrapper_ppp = (f) => (a0, a1) => Number(f(BigInt(a0), BigInt(a1)));
   var makeWrapper_pp = (f) => (a0) => Number(f(BigInt(a0)));
 
   var origExports = wasmExports;
   wasmExports = {};
   wasmExports['__main_argc_argv'] = makeWrapper___PP(origExports['__main_argc_argv']);
-  wasmExports['fflush'] = makeWrapper__p(origExports['fflush']);
   wasmExports['emscripten_builtin_memalign'] = makeWrapper_ppp(origExports['emscripten_builtin_memalign']);
   wasmExports['_emscripten_stack_alloc'] = makeWrapper_pp(origExports['_emscripten_stack_alloc']);
   Object.setPrototypeOf(wasmExports, origExports);
@@ -3969,9 +4272,31 @@ async function run(args = programArgs) {
 
 var wasmExports;
 
-// With async instantation wasmExports is assigned asynchronously when the
-// instance is received.
-createWasm().then(() => run());
+// In modularize mode the generated code is within a factory function so we
+// can use await here (since it's not top-level-await).
+wasmExports = await createWasm();
+await run();
 
 // end include: postamble.js
+
+// include: postamble_modularize.js
+// In MODULARIZE mode we wrap the generated code in a factory function
+// and return either the Module itself, or a promise of the module.
+
+// end include: postamble_modularize.js
+
+
+
+    return Module;
+  };
+})();
+
+// Export using a UMD style export, or ES6 exports if selected
+if (typeof exports === 'object' && typeof module === 'object') {
+  module.exports = createLive;
+  // This default export looks redundant, but it allows TS to import this
+  // commonjs style module.
+  module.exports.default = createLive;
+} else if (typeof define === 'function' && define['amd'])
+  define([], () => createLive);
 

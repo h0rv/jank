@@ -17,7 +17,7 @@ p code, td code, li code { background: var(--code); padding: 1px 4px; border-rad
 .block { margin: 16px 0; border: 1px solid var(--line); border-radius: 4px; background: var(--code); }
 .block figcaption { display: flex; justify-content: space-between; gap: 12px; padding: 6px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: .8rem; }
 pre { margin: 0; padding: 12px 14px; overflow-x: auto; line-height: 1.55; }
-#app, #stdout { white-space: pre-wrap; overflow-wrap: anywhere; }
+#result, #stdout { white-space: pre-wrap; overflow-wrap: anywhere; }
 a-k, a-kc, a-kd, a-kf, a-ki, a-kr { color: #c14a4a; }
 a-s { color: #4c7a5d; }
 a-n, a-cb { color: #945e80; }
@@ -26,7 +26,12 @@ a-f, a-fb, a-fm { color: #6c782e; }
 a-pr, a-at { color: #45707a; }
 a-c { color: #928374; font-style: italic; }
 .output { background: #fff; }
-#app { min-height: 5.5em; }
+#result { height: 12em; overflow-y: auto; }
+.input { display: flex; align-items: center; gap: 12px; margin: 16px 0 0; font-size: .9rem; color: var(--muted); }
+.input input { flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 4px; background: #fff; color: var(--ink); font: .95rem ui-monospace, Menlo, monospace; }
+.input button { padding: 8px 16px; border: 1px solid var(--accent); border-radius: 4px; background: var(--accent); color: #fff; font: inherit; font-size: .95rem; cursor: pointer; }
+.input button:disabled { opacity: .5; cursor: default; }
+.input input:focus { outline: 2px solid color-mix(in srgb, var(--accent) 50%, transparent); outline-offset: 1px; }
 #status { font-family: ui-monospace, Menlo, monospace; }
 [data-status="pass"] #status { color: #4f6b1f; }
 [data-status="fail"] #status { color: #a32b1d; }

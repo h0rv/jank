@@ -175,7 +175,8 @@ int main(int argc, const char** argv)
     std::vector<char const *> compiler_args{};
 
     auto const cross_config{ !target_config.triple.empty()
-                             && target_config.triple != llvm::sys::getDefaultTargetTriple() };
+                             && target_config.triple
+                               != jtl::immutable_string{ llvm::sys::getDefaultTargetTriple() } };
     if(!target_config.triple.empty())
     {
       compiler_args.emplace_back(strdup(util::format("--target={}", target_config.triple).c_str()));

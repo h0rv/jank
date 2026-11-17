@@ -53,7 +53,8 @@ namespace jank::jit
   static aot::target_config load_jit_config()
   {
     auto config{ aot::load_target_config(util::cli::opts.target_config).expect_ok() };
-    if(!config.triple.empty() && config.triple != llvm::sys::getDefaultTargetTriple())
+    if(!config.triple.empty()
+       && config.triple != jtl::immutable_string{ llvm::sys::getDefaultTargetTriple() })
     {
       config = aot::load_target_config("").expect_ok();
     }

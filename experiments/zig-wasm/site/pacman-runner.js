@@ -20,8 +20,11 @@ canvas.addEventListener('keydown', event => {
 });
 window.addEventListener('error', event => fail(event.message));
 window.addEventListener('unhandledrejection', event => fail(event.reason));
+// The page's ?v= stamp, passed on so a republish never mixes cached and new files.
+const version = document.currentScript?.src ? new URL(document.currentScript.src).search : '';
 var Module = {
   canvas,
+  locateFile: (path, dir) => `${dir}${path}${version}`,
   print: line => { lines.push(String(line)); diagnostics.textContent += `${line}\n`; },
   printErr: line => { diagnostics.textContent += `${line}\n`; console.warn(line); },
   onAbort: fail,
@@ -42,7 +45,7 @@ if (typeof WebAssembly === 'undefined') {
   fail('WebAssembly is unavailable in this browser.');
 } else {
   const script = document.createElement('script');
-  script.src = 'pacman.js';
+  script.src = `pacman.js${version}`;
   script.onerror = () => fail('Could not load pacman.js. Serve all site files together over HTTP.');
   document.body.appendChild(script);
 }

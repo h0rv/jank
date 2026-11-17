@@ -6,20 +6,21 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../site/runner.js', import.meta.url), 'utf8');
 const gameSource = readFileSync(new URL('../site/pacman-runner.js', import.meta.url), 'utf8');
-function runner({ wasm = true } = {}) {
+function runner({ wasm = true, currentScript } = {}) {
   const elements = Object.fromEntries(['run-form', 'input', 'run', 'result', 'status', 'stats', 'stdout'].map(id =>
     [id, { textContent: '', value: ' 100 ', disabled: true, scrollTop: 0, scrollHeight: 0,
       addEventListener(name, callback) { this[`on${name}`] = callback; } }]));
   const listeners = {};
   const scripts = [];
   const document = {
+    currentScript,
     documentElement: { dataset: { status: 'running' } },
     getElementById: id => elements[id],
     createElement: () => ({}),
     body: { appendChild: script => scripts.push(script) }
   };
   const created = [];
-  const context = vm.createContext({ document, performance: { now: () => 0 },
+  const context = vm.createContext({ document, URL, performance: { now: () => 0 },
     WebAssembly: wasm ? {} : undefined,
     createLive: options => { const instance = {}; created.push({ options, instance });
       return Promise.resolve(instance); },
@@ -53,6 +54,15 @@ test('starts a run on load, streams lines and reruns on submit', async () => {
   assert.equal(page.elements.run.textContent, 'Run again');
   options.onJankFrame({ frames: 9, collections: 2, used: 1048576, heap: 2097152 });
   assert.match(page.elements.stats.textContent, /frame 9, 2 garbage collections/);
+});
+
+test('the page version stamp reaches live.js and live.wasm', async () => {
+  const page = runner({ currentScript: { src: 'https://example.test/jank-wasm/runner.js?v=abc123' } });
+  assert.equal(page.scripts[0].src, 'live.js?v=abc123');
+  page.scripts[0].onload();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(page.created[0].options.locateFile('live.wasm', 'https://example.test/jank-wasm/'),
+    'https://example.test/jank-wasm/live.wasm?v=abc123');
 });
 
 test('missing WebAssembly and load errors give visible diagnostics', () => {

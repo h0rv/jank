@@ -17,6 +17,10 @@ cp examples/pacman/NOTICE.md "$STAGE/pacman-NOTICE.md"
 cargo build --quiet --release --locked --manifest-path tools/site-highlight/Cargo.toml \
   --target-dir "$ROOT/artifacts/site-highlight"
 artifacts/site-highlight/release/site-highlight "$STAGE/index.html"
+V=$(cat "$STAGE"/*.html "$STAGE"/*.css "$STAGE"/*.js "$STAGE"/*.wasm | sha256sum | cut -c1-12)
+sed -i -e "s/href=\"style.css\"/href=\"style.css?v=$V\"/" -e "s/src=\"runner.js\"/src=\"runner.js?v=$V\"/" \
+  -e "s/src=\"pacman.html\"/src=\"pacman.html?v=$V\"/" -e "s/src=\"pacman-runner.js\"/src=\"pacman-runner.js?v=$V\"/" \
+  "$STAGE/index.html" "$STAGE/pacman.html"
 touch "$STAGE/.nojekyll"
 rm -rf "$OUT"
 mv "$STAGE" "$OUT"

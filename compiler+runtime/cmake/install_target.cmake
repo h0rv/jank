@@ -1,4 +1,7 @@
 set(jank_target_sdk_dir "lib/jank/${PROJECT_VERSION}")
+if(EMSCRIPTEN)
+  set_property(DIRECTORY "${zstd_SOURCE_DIR}/build/cmake" PROPERTY EXCLUDE_FROM_ALL TRUE)
+endif()
 install(FILES "${CMAKE_BINARY_DIR}/libjank-static-runtime.a"
         DESTINATION "${jank_target_sdk_dir}/lib")
 install(FILES "${CMAKE_BINARY_DIR}/target_config.json"

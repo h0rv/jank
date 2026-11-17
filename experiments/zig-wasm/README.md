@@ -21,18 +21,19 @@ The original baseline uses an installed jank compiler for host code generation a
 | Zig provides wasm64-WASI libc. | Failed with the tested Zig version. |
 | An isolated jank-style tagged pointer survives encoding and decoding on wasm64. | Passed, without a collector. |
 | The actual generated jank module compiles to wasm64. | Passed with Emscripten and Wasm exceptions enabled. Object file only. |
-| The same module compiles to wasm32-WASI. | Failed on pointer width, platform guards and C++ threading dependencies. |
+| The same module compiles to wasm32-WASI. | Failed in the original test on pointer width, platform guards and C++ threading dependencies. Superseded by the later wasm32 representation port and the genuine wasm32-wasip1 row below. |
 | Newer Boehm collects on wasm64 with an explicit registered root. | Smoke passed through 32 forced collections. |
 | Newer Boehm discovers local roots with Asyncify. | Current smoke passes, but earlier variants lost live objects. Unresolved. |
 | Tagged-reference lifetime cases against the real jank runtime archive. | Fourteen cases pass natively and with flatten/spill/EH cleanup. Runtime-owned exception root cells protect object/error payloads, rethrow and exception_ptr; the harness exception-storage wrapper is removed. Default/static-only Wasm and test-only shadow slots still fail other cases. See [runtime-owned exceptions](#runtime-owned-exception-roots). |
 | Binaryen pointer spilling. | Stock SDK fails; preserved names, flattening and a private memory64/EH-cleanup patch cover the measured operands and unwind frames. The separate isolated collector script still uses the unmodified SDK and is not fixed by this experiment. |
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
 | Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Ordinary startup fails; static roots plus the private spill transform reach both markers with GC enabled, including 20 loaded-function entries. |
-| Fork-built wasm32 Emscripten runtime archive and generated spike. | Configure and Zig object succeeded; runtime/core and spike C++ fail on 64-bit pointer assumptions. No archive, link or Node execution. |
-| Is the `reader_opts` startup error wasm64-specific? | Startup diagnostics trace wasm64's failure to missing runtime C++ static roots; wasm32 cannot yet reach startup for comparison. |
+| Fork-built wasm32 Emscripten runtime archive and generated spike. | Archive, spike link and Node run succeed after the raw-reference port (`JANK_NAN_BOXING` off on 32-bit targets). Ordinary startup fails as on wasm64; static roots plus stock Binaryen flatten/spill reach both markers in 20 continuous-GC entries. See [wasm32](#wasm32-raw-reference-runtime-and-gc-enabled-zig-spike). |
+| Is the `reader_opts` startup error wasm64-specific? | No: ordinary wasm32 startup reports the same `reader_opts` type error. Startup diagnostics trace wasm64's failure to missing runtime C++ static roots, and the same static-root plus spill path fixes both widths for this spike. |
 | Tagged jank map retention across wasm64 collections. | An explicitly registered static root passes; the default unregistered root is lost. This is a diagnostic control, not a runtime rooting solution. |
 | Real wasm64 spike with GC disabled during execution and explicit top-level collections. | Both success markers in 20 iterations, including post-collection loaded-function re-entry; churn/extra-collection variant also passes with bounded observed used memory. |
 | Emscripten compiler + WASI ABI shim + Wasmtime, wasm64 spike. | Both markers and exit 0 with static roots and the private spill transform; not a native wasi-sdk runtime port. See [WASI](#wasi). |
+| Genuine wasi-sdk 34 wasm32-wasip1 runtime and spike in Wasmtime. | Both markers in 20 continuous-GC entries, with nREPL excluded from WASI AOT, legacy-EH rebuilt libc++/libc++abi/libunwind, stock Binaryen flatten/spill and exnref translation. Bounded spike, not general WASI support. See [native wasm32-wasip1](#native-wasm32-wasip1-legacy-eh-through-wasmtime-with-gc-on). |
 
 The native Zig C++ build still uses the installed jank package's matching libc++, libunwind and LLVM 23 compiler runtime. It does not rebuild all dependencies with Zig. The generated launcher's extraction also invokes the installed jank compiler before the final Zig compilation.
 
@@ -57,7 +58,9 @@ The AI-assisted research site at <http://horv.co/jank-wasm/> runs the pure-jank
 `bash scripts/build-pages.sh` to build the example and assemble the static site
 in ignored `artifacts/pages/jank-wasm/`. It includes the site sources from
 `site/`, `hello.js`, `hello.wasm` and `.nojekyll`, but no unspilled diagnostic
-binary or CNAME. Internal links/assets are relative for the `/jank-wasm/` prefix.
+binary or CNAME. Code blocks marked `data-lang` are highlighted at build time by
+`tools/site-highlight`, a small Rust tool using arborium 2.18.2, so the host
+also needs Cargo; the page loads no highlighting script. Internal links/assets are relative for the `/jank-wasm/` prefix.
 Serve `artifacts/pages/` locally and open `/jank-wasm/` to check before publishing.
 Publish only the assembled directory's contents at the root of `gh-pages`, in a
 new commit preserving that branch's history; the script does not push. The
@@ -194,9 +197,11 @@ are reported rather than silently upgrading it.
 
 The wrapper hides Emscripten flags, memory64, Wasm exceptions, static-root
 registration and the post-link spill transform. **This remains the experimental
-spill/static-root path: ordinary startup still fails.** The collector follow-up
-below adds flattening and private exception-edge spill cleanup, but general
-exception-storage ownership remains unresolved outside its test harness.
+spill/static-root path: ordinary startup still fails.** The collector follow-ups
+below add flattening and private exception-edge spill cleanup, and the runtime
+now owns roots for thrown jank objects and errors
+([runtime-owned exceptions](#runtime-owned-exception-roots)). Arbitrary native
+exceptions with GC-managed fields are outside that contract.
 Passing this bounded application is not general GC safety or supported
 Wasm/browser portability. A memory64- and Wasm-exception-capable browser is
 required (the tested Chrome 156 has both). No threads, DOM/fetch application
@@ -794,9 +799,13 @@ This section records the comparison before target-config application was merged.
 Its target-config/path-leak limitations are historical; the runtime pointer-width
 blockers below are not fixed by applying the target triple.
 
-This AI-assisted comparison starts from PR #5 head `2ea3f2828`. **Whether the
-`reader_opts` error is wasm64-specific remains undetermined:** wasm32 fails
-before archive creation, not at startup. The wasm64 startup investigation below
+The later [wasm32 raw-reference port](#wasm32-raw-reference-runtime-and-gc-enabled-zig-spike)
+supersedes these pointer-width blockers: the archive, spike link and Node run now
+succeed, and ordinary wasm32 startup shows the same `reader_opts` error.
+
+This AI-assisted comparison starts from PR #5 head `2ea3f2828`. **At this
+checkpoint, whether the `reader_opts` error was wasm64-specific was undetermined:**
+wasm32 failed before archive creation, not at startup. The wasm64 startup investigation below
 traces its cached reader-options map changing type across collection to missing
 runtime C++ static roots; it does not claim a complete rooting fix.
 No runtime representation, target-config
@@ -1769,6 +1778,9 @@ The existing container/runtime archives were reused, and Binaryen was rebuilt
 after reversing the old patch before applying the new one. Seven fresh processes
 per row, sequentially, without concurrent builds; medians below. No CPU pinning
 or frequency control was applied, so these are bounded probe measurements.
+The first-entry figures here predate local compaction; the
+[first-entry follow-up](#wasm64-first-entry-follow-up-compact-locals-after-spilling)
+records the current pipeline's ~281 ms first entry.
 
 | Variant | GC during execution | Raw binary/Wasm bytes | gzip bytes | Node start → pre-jank, ms | Re-entry, µs/call | Correctness |
 | --- | --- | ---: | ---: | ---: | ---: | --- |
@@ -1792,7 +1804,7 @@ zeroing was attempted; attributing all of that cost to any one is unwarranted.
 | --- | ---: | --- |
 | PR #12, spill only, older private patch | +65.869% | 5.652×, whole Node process / 20 entries |
 | PR #14, flatten/spill, EH cleanup and zeroing | +142.039% | 22.704×, whole Node process / 20 entries |
-| This probe, current main's pipeline | +142.493% | 1.715× pre-jank startup; 26.96× first entry; **1.909× warm re-entry** |
+| This probe, PR #14 pipeline (before local compaction) | +142.493% | 1.715× pre-jank startup; 26.96× first entry; **1.909× warm re-entry** |
 
 The two historical results and this run all use optimized **`-O2 -g`** app
 builds with a Release runtime, not demonstrated `-O0` Debug builds. Retained
@@ -1982,7 +1994,8 @@ and the expected GC state; unspilled/GC-disabled remains a diagnostic control.
 transform took **214 s** in this container. That one-time cost is excluded from
 runtime startup measurements. Debug names remain, but DWARF locations are not
 trusted after flatten/coalesce (Binaryen warns about their incompatibility).
-This change does not close the separately documented thrown-payload root gap.
+This change did not close the then-open thrown-payload root gap; the later
+[runtime-owned exception roots](#runtime-owned-exception-roots) closed it for jank objects and errors.
 
 Reproduce sequentially from this directory (do not rebuild/check concurrently
 with measurement, since `check` recreates the staged sources):
@@ -2039,8 +2052,11 @@ browser  PASS
 ```
 
 The plain spill variant passes the original seven lifetime cases, operand,
-exception-local, and exception-stack; exception-payload still fails without
-the existing explicit exception-storage-root control, just as natively.
+exception-local, and exception-stack; at this checkpoint exception-payload
+failed without the then-existing explicit exception-storage-root control, just as
+natively. The `spill-exception-roots` mode above has since been removed: the
+[runtime-owned exception roots](#runtime-owned-exception-roots) pass that case
+without it.
 Default/static-only/shadow/Asyncify controls retain their documented failures;
 the matrix's registered-exception native and Wasm success gates passed.
 `run node` prints both markers for all **20** entries, GC enabled. The automated
@@ -2138,7 +2154,9 @@ Three new cases use real Wasm exceptions (`-fwasm-exceptions`):
   reruns locals, nested, temporary and operand cases. A combined all-cases
   execution also runs runtime-internal/global/reclaim tests afterward.
 
-**Exception storage is an independent root gap, including natively.**
+**At this checkpoint, exception storage was an independent root gap, including
+natively** (since closed for jank objects and errors by
+[runtime-owned exception roots](#runtime-owned-exception-roots)).
 Emscripten libc++abi's `__cxa_allocate_exception` obtains storage from
 `__aligned_malloc_with_fallback` (ordinary malloc storage, not a Boehm object).
 Native libstdc++ and the unregistered spill variant both lose the thrown-only
@@ -3084,8 +3102,9 @@ Compared with Emscripten/Node, the final WASI module needs **no JS glue** and
 uses a standard OS-I/O interface under Wasmtime, a useful server-runtime route.
 The cost is the absent wasm64 WASI libc and this explicit ABI shim; browsers
 still need a JS WASI polyfill/host layer, and threads/sockets/platform services
-remain limited by the runtime and Preview 1. The same experimental GC rooting,
-exception ownership and stack-headroom caveats apply. Passing this one workload
+remain limited by the runtime and Preview 1. The same experimental GC rooting
+and stack-headroom caveats apply; the runtime-owned exception roots were not
+rerun on this route. Passing this one workload
 does not establish general jank WASI support or >4-GiB interoperability.
 
 Wasm GC does not automatically collect the current C++/bdwgc object graph:
@@ -3165,9 +3184,12 @@ python3 -B experiments/zig-wasm/examples/bench-cljc/measure.py
 
 The driver bootstraps through jank-build and writes JSON (including ten samples
 per kernel), Markdown tables and logs under ignored `artifacts/bench-cljc/`.
-All three primary targets pass their checksums in the recorded run. The
-explicitly unsafe no-spill variant, with GC disabled, runs out of memory despite
-exit 0; the driver records the failure and exits 1. The report separates build,
+After the runtime fixes in the report's Optimisations section, all four
+targets pass every checksum (`BENCHMARK VERDICT: PASS`), including the
+explicitly unsafe no-spill variant with GC disabled; its baseline out-of-memory
+failure and exit 1 are historical. jank is still slower than ClojureScript on
+most kernels; native fib27 is the exception, and most of wasm64 fib27's time is
+the spill pipeline. The report separates build,
 execution, correctness, startup and warm timings, and discusses ratios, the
 4 MiB Wasm stack and private spill-transform limitations. These finite results
 do not establish general Wasm support.

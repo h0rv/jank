@@ -1,0 +1,9 @@
+# AI-assisted build-time syntax highlighter for the Pages site.
+[package]
+name = "site-highlight"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+arborium = { version = "=2.18.2", default-features = false, features = ["lang-clojure", "lang-json", "lang-bash"] }

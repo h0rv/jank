@@ -28,6 +28,8 @@ The original baseline uses an installed jank compiler for host code generation a
 | Binaryen pointer spilling works in the collector test. | Failed during linking. The collector suite correctly exits 1. |
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
 | Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Node reaches a jank startup error; neither spike success marker is printed. |
+| Fork-built wasm32 Emscripten runtime archive and generated spike. | Configure and Zig object succeeded; runtime/core and spike C++ fail on 64-bit pointer assumptions. No archive, link or Node execution. |
+| Is the `reader_opts` startup error wasm64-specific? | Startup diagnostics trace wasm64's failure to missing runtime C++ static roots; wasm32 cannot yet reach startup for comparison. |
 | Tagged jank map retention across wasm64 collections. | An explicitly registered static root passes; the default unregistered root is lost. This is a diagnostic control, not a runtime rooting solution. |
 
 The native Zig C++ build still uses the installed jank package's matching libc++, libunwind and LLVM 23 compiler runtime. It does not rebuild all dependencies with Zig. The generated launcher's extraction also invokes the installed jank compiler before the final Zig compilation.
@@ -499,6 +501,118 @@ The final native build returned 0 (78 s incremental), and `jank-test` returned
 assertions. These results do not validate general filesystem/TTY behavior,
 Wasm GC root visibility, tagged-reference GC safety, or successful spike
 execution. The earlier collector-suite limitations remain unresolved.
+
+### wasm32 runtime archive and spike attempt
+
+This AI-assisted comparison starts from PR #5 head `2ea3f2828`. **Whether the
+`reader_opts` error is wasm64-specific remains undetermined:** wasm32 fails
+before archive creation, not at startup. The wasm64 startup investigation below
+traces its cached reader-options map changing type across collection to missing
+runtime C++ static roots; it does not claim a complete rooting fix.
+No runtime representation, target-config
+implementation or collector source was changed to force it through.
+
+The fresh VM had no experiment tools, builds or container. The documented
+Ubuntu 24.04 container was recreated with the exact LLVM 23.1.6 package version
+above, Emscripten 7.0.0, Zig 0.17.1 and Node 26.13.1. All downloaded SDKs,
+builds and logs are under ignored experiment directories; no VM packages or
+global tools were installed/replaced. The scripts export `C.UTF-8` and use
+`jank-phase-1` for target core generation. The native Zig archive was prepared
+with `build-host-linux.sh spike` (0, 109 s; both markers in JIT and AOT).
+
+`build-wasm64-target.sh` now accepts `WASM_BITS=32` (default remains 64), selects
+`artifacts/build-wasm32`, `artifacts/wasm32-spike`, `.tools/wasm32-headers` and
+`artifacts/logs/wasm32-*`, omits `--wasm64` from embuilder, omits MEMORY64 from
+all C/C++/link flags, and uses `zig build-obj -target wasm32-freestanding`.
+The runtime-smoke success line now prints its compiled pointer width.
+
+```sh
+# First reproduce the wasm64 flow as above, including native host and Zig archive.
+for step in deps configure build spike; do
+  docker exec --user 1000:1000 -e WASM_BITS=32 jank-host-build \
+    bash scripts/build-wasm64-target.sh "$step" || break
+done
+# Even after build fails, independently inspect spike generation/Zig/C++:
+docker exec --user 1000:1000 -e WASM_BITS=32 jank-host-build \
+  bash scripts/build-wasm64-target.sh spike
+```
+
+Results below are exit / elapsed seconds, per invocation, not benchmarks.
+Source inspection is recorded in `wasm32-source-inspection.{log,result}`;
+other phases use the helper's matching `.log`/`.result` files.
+
+| Phase | Reproduced wasm64 baseline | wasm32 |
+| --- | --- | --- |
+| Source inspection | Existing 64-bit pointer/NaN-box representation | 0 / 0 s; `__wasm32__`, pointer size 4, Wasm exceptions; 349/349 commands omit MEMORY64 |
+| Native host configure / build | 0 / 9 s; 0 / 205 s | Same host used |
+| Target dependencies | 0 / 4 s | 0 / 2 s |
+| Target configure | 0 / 67 s | Initially 1 / 51 s; metadata discovery fix: 0 / 4 s |
+| Compile / archive | 0 / 84 s | 1 / 68 s; 143 failed object edges, no final archive |
+| Spike host generation / Zig object | 0 / 1 s; 0 / 0 s | 0 / 1 s; 0 / 0 s |
+| Spike C++ compile | 0 / 5 s | 1 / 3 s; same pointer-width errors |
+| Runtime-smoke compile | Included in spike compile | Independent attempt: 1 / 2 s; same pointer-width errors |
+| Runtime-smoke link / Node | 0 / 17 s; 0 / 0 s | Not reached |
+| Spike link / Node | 0 / 4 s; 0 / 0 s | Not reached; no Node output |
+| Correctness / marker gate | Spike helper 1: neither success marker | Not reached; neither marker, no startup comparison |
+
+The first wasm32 configure rejected the native zstd package's 64-bit version
+check and LLVM's imported `LLVMSupport` then lacked `zstd::libzstd_shared`.
+For wasm32 only, the helper supplies `zstd_LIBRARY` and `zstd_INCLUDE_DIR` to
+LLVM's module finder, the same host-metadata dependency already present in
+the wasm64 configuration. This is not a target zstd implementation: the real
+target zstd is still fetched/built separately. Host LLVM discovery/path leakage
+remains unresolved; neither host zstd nor LLVM is supplied to the spike link.
+
+All 143 failed object edges first report `jtl/primitive.hpp:42`:
+`static assertion failed due to requirement 'sizeof(unsigned long long) == sizeof(void *)'`.
+`uptr`/`usize` are fixed `unsigned long long`; line 43 asserts the same width.
+Secondary errors include string-size narrowing and `runtime/oref.hpp` pointer
+bit casts to/from `u64`/`f64`: libc++ rejects `sizeof(object *) == sizeof(double)`
+because **4 == 8 is false**. Changing only the size aliases cannot fix the
+NaN-box encoding, which stores 64-bit numeric/tag data in pointer-sized fields.
+Removing assertions, truncating tags or injecting platform macros would not
+preserve the same runtime semantics. A 32-bit representation port is outside
+this comparison's minimal-build-fix scope. The existing collector patch already
+selects `CPP_WORDSZ=32`; it is not the first failing edge. Its correctness and
+the earlier collector-suite failures remain unresolved.
+
+All 16 core C++ files were generated natively. Both the core and the actual
+spike fail through their real runtime-header includes, so this is not merely
+an unused-header probe. The generated launcher also hardcodes
+`using jank_usize = unsigned long long` (`aot/processor.cpp::gen_entrypoint`);
+its PCH-size declaration is not exercised by this static entrypoint. The spike
+buffer declaration retains `std::size_t` rather than a baked numeric size.
+No later generated-source ABI failures can be excluded before the headers
+compile. Core-generation commands in `CMakeLists.txt` pass no `--target-config`;
+the spike helper likewise uses native analysis then target compile-database
+flags. `target_json.cmake` records `wasm32-unknown-emscripten`, but
+`aot::build_compiler_args` does not apply that triple as a target or alter the
+NaN-box representation. Merely changing the JSON triple cannot resolve this.
+
+Exact wasm64 Node baseline output (spike process exit 0, helper exit 1):
+
+```text
+The `reader_opts` argument must be a map, not a `persistent_list`.
+Stack traces are unsupported on Emscripten.
+```
+
+Exact wasm64 runtime-smoke output (exit 0):
+
+```text
+runtime smoke exception
+Stack traces are unsupported on Emscripten.
+wasm64 runtime: exception dispatch and unsupported capabilities passed
+```
+
+After parameterization and the width-aware smoke change, the wasm64 spike was
+checked again: generation 0 / 2 s, Zig 0 / 0 s, C++ 0 / 6 s, smoke link
+0 / 2 s and run 0 / 0 s, spike link 0 / 4 s and run 0 / 0 s. Both Node outputs
+were identical to the baseline; the helper still exits 1 for missing markers.
+The SDK warns that MEMORY64 is deprecated in favor of `-m64`; the documented
+baseline was deliberately retained. Script syntax passed; invalid `WASM_BITS=16`
+was rejected with exit 2. No runtime sources changed. Native `jank-test`
+additionally returned 0 / 9 s: 129/129 cases, 2029/2029 assertions, 868 jank
+files, 9 skips and 0 failures. No wasm32 runtime correctness is claimed.
 
 ### wasm64 startup investigation: GC root visibility
 

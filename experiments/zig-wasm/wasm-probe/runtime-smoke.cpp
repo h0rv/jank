@@ -59,5 +59,6 @@ int main()
     return 4;
   }
   util::print_exception(std::runtime_error{ "runtime smoke exception" });
-  std::puts("wasm64 runtime: exception dispatch and unsupported capabilities passed");
+  std::printf("wasm%zu runtime: exception dispatch and unsupported capabilities passed\n",
+              sizeof(void *) * 8);
 }

@@ -14,20 +14,30 @@
   <p>A research fork of <a href="https://github.com/jank-lang/jank">jank</a> that compiles Clojure ahead of time to WebAssembly.</p>
 
   <h2>Live example</h2>
-  <p>Edit the numbers. Each edit is passed to the compiled jank module running in this tab, and the map underneath is what its <code>summarize</code> function returns.</p>
+  <p>Press Run. The compiled jank module running in this tab counts primes below the number you give it, 4,000 candidates per animation frame, and prints a line after each chunk. Run it again with another number at any time.</p>
   <figure class="block">
     <figcaption>examples/live-demo/src/live/core.jank</figcaption>
-    <pre data-lang="clojure">(defn summarize [text]
-  (let [xs (vec (keep parse-long (re-seq #"-?\d+" text)))]
-    {:count (count xs)
-     :sum (reduce + 0 xs)
-     :weighted (reduce + 0 (map-indexed (fn [i x] (* (inc i) x)) xs))
-     :sorted (vec (sort xs))
-     :frequencies (frequencies xs)}))</pre>
+    <pre data-lang="clojure">(defn prime? [n]
+  (and (&gt; n 1)
+       (loop [d 2]
+         (cond
+           (&gt; (* d d) n) true
+           (zero? (rem n d)) false
+           :else (recur (inc d))))))
+
+(defn step [{:keys [from limit found]}]
+  (let [to (min limit (+ from chunk-size))]
+    {:from to
+     :limit limit
+     :found (+ found (count (filter prime? (range from to))))}))</pre>
   </figure>
-  <label class="input"><span>Numbers</span><input id="input" value="3 1 4 1 5 9 2 6 5 3 5" autocomplete="off" spellcheck="false" disabled></label>
+  <form class="input" id="run-form">
+    <label for="input">Count primes below</label>
+    <input id="input" type="text" inputmode="numeric" value="200000" autocomplete="off" spellcheck="false">
+    <button id="run" type="submit" disabled>Run</button>
+  </form>
   <figure class="block output" aria-label="Live example output">
-    <figcaption><span>(summarize numbers)</span><span id="status" role="status">loading live.wasm</span></figcaption>
+    <figcaption><span>output</span><span id="status" role="status">loading live.wasm</span></figcaption>
     <pre id="result" aria-live="polite"></pre>
     <details><summary>Runtime log</summary><pre id="stdout"></pre></details>
   </figure>

@@ -1,4 +1,4 @@
-;; AI-assisted page bridge: Module.liveInput in, Module.onLiveResult out.
+;; AI-assisted page bridge: Module.liveInput in, Module.onLiveLine and onLiveFinish out.
 (ns live.page)
 
 #?(:wasm
@@ -14,12 +14,16 @@ EM_JS(void, live_input_copy, (char *out, int size), {
   Module.liveInput = null;
 });
 EM_JS(void, live_show, (char const *text), {
-  Module.onLiveResult?.(UTF8ToString(Number(text)));
+  Module.onLiveLine?.(UTF8ToString(Number(text)));
+});
+EM_JS(void, live_finish, (char const *text), {
+  Module.onLiveFinish?.(UTF8ToString(Number(text)));
 });
 #else
 inline int live_input_size() { return -1; }
 inline void live_input_copy(char *, int) {}
 inline void live_show(char const *) {}
+inline void live_finish(char const *) {}
 #endif
 inline jank::runtime::object_ref live_take_input()
 {
@@ -41,3 +45,8 @@ inline jank::runtime::object_ref live_take_input()
    (defn show [text] (cpp/live_show (cpp/.c_str (cpp/jank.runtime.to_string text))))
    :native
    (defn show [text] (println text)))
+
+#?(:wasm
+   (defn finish [text] (cpp/live_finish (cpp/.c_str (cpp/jank.runtime.to_string text))))
+   :native
+   (defn finish [text] (println text)))

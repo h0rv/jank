@@ -1,4 +1,4 @@
-// AI-assisted tests for the live demo runner's input, result and error states.
+// AI-assisted tests for the live demo runner's run, output and error states.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -6,8 +6,8 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../site/runner.js', import.meta.url), 'utf8');
 function runner({ wasm = true } = {}) {
-  const elements = Object.fromEntries(['input', 'result', 'status', 'stats', 'stdout'].map(id =>
-    [id, { textContent: '', value: '1 2 3', disabled: true,
+  const elements = Object.fromEntries(['run-form', 'input', 'run', 'result', 'status', 'stats', 'stdout'].map(id =>
+    [id, { textContent: '', value: ' 100 ', disabled: true, scrollTop: 0, scrollHeight: 0,
       addEventListener(name, callback) { this[`on${name}`] = callback; } }]));
   const listeners = {};
   const scripts = [];
@@ -27,21 +27,29 @@ function runner({ wasm = true } = {}) {
   return { document, elements, listeners, scripts, created };
 }
 
-test('starts the module, sends input and shows its result', async () => {
+test('starts a run on load, streams lines and reruns on submit', async () => {
   const page = runner();
   assert.equal(page.scripts[0].src, 'live.js');
   page.scripts[0].onload();
   await new Promise(resolve => setImmediate(resolve));
   const { options, instance } = page.created[0];
   assert.equal(options.arguments[0], 'static-roots');
-  assert.equal(page.elements.input.disabled, false);
-  assert.equal(instance.liveInput, '1 2 3');
-  page.elements.input.value = '4 5';
-  page.elements.input.oninput();
-  assert.equal(instance.liveInput, '4 5');
-  options.onLiveResult('{:count 2}');
-  assert.equal(page.elements.result.textContent, '{:count 2}');
+  assert.equal(page.elements.run.disabled, false);
+  assert.equal(instance.liveInput, '100');
+  assert.equal(page.document.documentElement.dataset.status, 'running');
+  options.onLiveLine('checked 100 of 200, 25 primes so far');
+  options.onLiveFinish('46 primes below 200');
+  assert.equal(page.elements.result.textContent,
+    'checked 100 of 200, 25 primes so far\n46 primes below 200\n');
   assert.equal(page.document.documentElement.dataset.status, 'pass');
+  instance.liveInput = null;
+  page.elements.input.value = '50';
+  let prevented = false;
+  page.elements['run-form'].onsubmit({ preventDefault: () => { prevented = true; } });
+  assert.ok(prevented);
+  assert.equal(instance.liveInput, '50');
+  assert.equal(page.elements.result.textContent, '');
+  assert.equal(page.elements.run.textContent, 'Run again');
   options.onJankFrame({ frames: 9, collections: 2, used: 1048576, heap: 2097152 });
   assert.match(page.elements.stats.textContent, /frame 9, 2 garbage collections/);
 });

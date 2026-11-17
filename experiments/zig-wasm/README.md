@@ -55,10 +55,11 @@ The GC experiment pins Emscripten 7.0.0 and Boehm commit `91f30f37b0457566e9823b
 
 The AI-assisted research site at <http://horv.co/jank-wasm/> runs the pure-jank
 `examples/live-demo` AOT module live, not a browser REPL. It is a `frame`
-project (see below) built with `-sMODULARIZE=1`: the page stores each edit of
-its input in `Module.liveInput`, the next frame's jank `summarize` reads it and
-returns the result through `Module.onLiveResult`, and `Module.jankFrameStats`
-supplies the frame and collection counts shown beside it. The site's Build link
+project (see below) built with `-sMODULARIZE=1`: Run stores the input in
+`Module.liveInput`; the next frame's jank code starts a prime count and each
+later frame checks one 4,000-number chunk, reporting through
+`Module.onLiveLine`/`onLiveFinish`. `Module.jankFrameStats` supplies the frame
+and collection counts shown beside it. The site's Build link
 points at the [one-command section](#one-command-native--wasm) below rather
 than repeating it. From this directory, run
 `bash scripts/build-pages.sh` to build the example and assemble the static site

@@ -1688,6 +1688,122 @@ logs, bad markers, nonzero exits, bad iteration/count sequences and wrong GC
 state. No native compiler/runtime source changed; the native differential row
 passes all seven cases, but the full native suite was not rerun for this step.
 
+### Release-build spill cost (AI-assisted measurement)
+
+Measured on the x86-64 Intel Xeon/KVM host (8 vCPUs), entirely in the
+`ubuntu:24.04` `jank-host-build` container bootstrapped by `jank-zig`.
+Updated after merging PR #14 (`origin/main` at `f39bf5ec2`). Zig is **0.17.1**,
+Node **26.13.1**, Emscripten **7.0.0**; Binaryen is `a9141c8cc` with main's
+expanded memory64/EH-cleanup/fresh-slot-zeroing patch (SHA-256
+`e226384854712c6d94cbda84685d4fe427c9a1c2d159aae5dcb76dd3fd60bf92`).
+The existing container/runtime archives were reused, and Binaryen was rebuilt
+after reversing the old patch before applying the new one. Seven fresh processes
+per row, sequentially, without concurrent builds; medians below. No CPU pinning
+or frequency control was applied, so these are bounded probe measurements.
+
+| Variant | GC during execution | Raw binary/Wasm bytes | gzip bytes | Node start → pre-jank, ms | Re-entry, µs/call | Correctness |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Native | Enabled | 9,208,344 | 2,646,554 | N/A | 1.564 | PASS |
+| wasm64, no flatten/spill, static roots | Disabled | 10,496,398 | 2,029,926 | 37.619 | 3.790 | PASS |
+| wasm64, flatten + spill, static roots | Disabled (matched control) | 25,453,001 | 5,874,035 | 64.521 | 7.236 | PASS |
+| wasm64, flatten + spill, static roots | Enabled | 25,453,001 | 5,874,035 | 60.757 | 7.455 | PASS |
+
+**Matched GC-disabled cost: 2.425× raw size (+142.5%), 2.894× gzip size,
+and 1.909× steady re-entry time (+90.9%).** The startup column ends **before
+jank initialization**, not before just the repeated calls. Separately timing
+the generated launcher's entire first entry (jank/core initialization plus the
+first spike call) gives **119.737 → 3,227.713 ms**, or **26.96×**, with GC
+disabled. Native first entry is 64.247 ms; spill/GC-enabled is 3,222.846 ms.
+Thus the very large whole-process ratio is not just module instantiation:
+first-entry work, potentially including lazy engine compilation, dominates.
+No profiling split between core loading, lazy compilation and spill-slot
+zeroing was attempted; attributing all of that cost to any one is unwarranted.
+
+| Comparison | Raw size increase | Timing and scope |
+| --- | ---: | --- |
+| PR #12, spill only, older private patch | +65.869% | 5.652×, whole Node process / 20 entries |
+| PR #14, flatten/spill, EH cleanup and zeroing | +142.039% | 22.704×, whole Node process / 20 entries |
+| This probe, current main's pipeline | +142.493% | 1.715× pre-jank startup; 26.96× first entry; **1.909× warm re-entry** |
+
+The two historical results and this run all use optimized **`-O2 -g`** app
+builds with a Release runtime, not demonstrated `-O0` Debug builds. Retained
+names/debug metadata dilute raw size percentages: the current `--strip-debug`
+companions are **4,447,936 → 17,085,107 bytes (+284.1%)**, without changing
+code optimization. Only the original named/debug binaries are timed. The
+PR #14 whole-process samples also ran alongside the matrix, unlike this run.
+The previous version of this section's +302.2% / 1.379× result used the older
+patch, a 16-MiB stack, extra pre-transform `wasm-opt -O2`, and stripped outputs;
+it is superseded, not a measurement of current main. This run uses main's
+exact pass order, patch and 4-MiB stack, with no extra optimization pass.
+We did not rerun spill-only or an all-`-O0` runtime build. These measurements
+do not isolate individual pass costs or establish general GC safety.
+
+Reproduce from `experiments/zig-wasm`:
+
+```sh
+./jank-zig build
+docker exec --user 1000:1000 jank-host-build \
+  python3 scripts/measure-spill-cost.py --self-test
+docker exec --user 1000:1000 jank-host-build \
+  python3 scripts/measure-spill-cost.py > artifacts/logs/spill-cost.log 2>&1
+cat artifacts/spill-cost/results.json
+```
+
+For pre-PR-#14 SDK trees, first reverse the old private Binaryen patch or
+re-extract the pinned source archive: the expanded patch requires a clean
+`a9141c8cc` tree, as described in the follow-up below. `jank-zig build` then
+rebuilds Binaryen and refreshes its patch stamp; the measurement script checks
+that stamp. No container, runtime archive or global SDK reinstall is needed.
+
+The harness logs compiler/link commands and invokes main's checked-in
+`wasm-probe/spill-pointers.py` for the transform. It reuses Release archives
+(`CMAKE_BUILD_TYPE=Release`, release default `-O3 -DNDEBUG`; individual runtime
+commands can override with `-O2`). It recompiles the same generated launcher,
+`spike.core` and measurement driver using each runtime's context compile flags,
+without the native PCH, appending **`-O2 -g`** for both targets. Zig uses
+**`-O ReleaseSafe`** for both. Native links with `g++-14`, `-pthread -ldl`;
+its ELF is unstripped and uses system shared libraries, unlike the Wasm module.
+Sizes exclude the Emscripten JS companion; gzip is Python gzip level 9, mtime 0.
+
+Wasm links with main's **`-O2 -g --profiling-funcs -sMEMORY64=1
+-fwasm-exceptions -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1
+-sSTACK_SIZE=4194304 -Wl,--error-limit=0`**, plus the measurement-only
+`spill-cost-pre.js` hook and C++ timing driver. Both Wasm variants use that
+same **4-MiB stack**, including the unspilled control. Only spill receives
+**`--flatten --spill-pointers -g`** through main's helper and its identical
+feature flags; there is no additional pre/post-transform optimization.
+Emscripten's own `-O2` link optimization remains enabled for both variants.
+Names are retained because Binaryen needs the stack-pointer name. Debug data
+is retained exactly as in main; Binaryen warns flatten is not fully compatible
+with DWARF, so transformed source locations are not trusted. Stripped companion
+files are generated only for size accounting, not substituted for timed files.
+
+`process.uptime()` in Emscripten `preRun` measures Node initialization, JS
+loading, Wasm compilation/instantiation and runtime setup, **before main or
+jank initialization**. It excludes Docker invocation overhead and does not
+measure jank/core loading; the driver's separate `FIRST_ENTRY` timer does.
+This is a fresh-process measurement with warm OS
+file caches, not a cold-disk or browser measurement.
+
+The C++ driver first invokes the real generated launcher, then uses
+`jank_call0(jank_deref(jank_var_intern_c("spike.core", "-main")))` for
+1,000 warm-up calls and 10,000 timed calls. Timing uses `steady_clock` inside
+the process and excludes first-entry/core loading. Both targets still execute
+the spike's marker formatting and output machinery, redirected to `/dev/null`
+during warm-up/timing; this is **not** an arithmetic-only microbenchmark.
+Correctness is checked separately by requiring both expected markers from
+the initial and final untimed call, clean process exit, a timing record and
+the expected final GC state in every sample. Timed-call output is suppressed,
+not individually validated. Static roots are registered in **both** Wasm
+variants; the unspilled control disables GC before jank initialization and
+never collects at safepoints. It is a diagnostic baseline, not a GC-safe mode.
+The spill-enabled samples have GC enabled and the counter advances **15 → 16**
+over each 10,000-call timed loop, not every entry; the GC-disabled counters
+stay 1 → 1. Current main's bounded operand/EH checks are documented below;
+this benchmark adds no claim about general rooting or exception safety.
+Raw seven-sample timings, per-run logs, binaries and results stay under ignored
+`artifacts/spill-cost/`; the full native suite and browser were not rerun.
+
 ### wasm64 spill follow-up: operand stacks and exception paths
 
 This is a collector-only extension of PR #12, using the same real runtime

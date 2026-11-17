@@ -10,6 +10,9 @@ STAGE=$(mktemp -d "$ROOT/artifacts/pages/.stage-XXXXXX")
 trap 'rm -rf "$STAGE"' EXIT
 cp site/index.html site/try.html site/style.css site/runner.js "$STAGE/"
 cp artifacts/app/hello/wasm/hello.js artifacts/app/hello/wasm/hello.wasm "$STAGE/"
+cargo build --quiet --release --locked --manifest-path tools/site-highlight/Cargo.toml \
+  --target-dir "$ROOT/artifacts/site-highlight"
+artifacts/site-highlight/release/site-highlight "$STAGE/index.html" "$STAGE/try.html"
 touch "$STAGE/.nojekyll"
 rm -rf "$OUT"
 mv "$STAGE" "$OUT"

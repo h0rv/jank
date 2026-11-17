@@ -8,7 +8,7 @@ function finish(ok, message) {
 }
 function fail(reason) {
   diagnostics.textContent += `${reason}\n`;
-  finish(false, 'Could not run — see diagnostics and browser requirements');
+  finish(false, 'failed, see runtime log');
 }
 window.addEventListener('error', event => fail(event.message));
 window.addEventListener('unhandledrejection', event => fail(event.reason));
@@ -21,7 +21,7 @@ var Module = {
     const lines = document.getElementById('app').textContent.split('\n');
     const ok = code === 0 && ['platform: browser', 'weighted buffer: 30',
       'hello: checks passed'].every(line => lines.includes(line));
-    finish(ok, ok ? 'PASS · computed in your browser' : 'FAIL · see diagnostics');
+    finish(ok, ok ? 'exit 0, checks passed' : 'failed, see runtime log');
   }
 };
 if (typeof WebAssembly === 'undefined') {

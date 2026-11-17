@@ -1,7 +1,18 @@
-execute_process(
-  COMMAND "${CMAKE_CXX_COMPILER}" -print-target-triple
-  OUTPUT_VARIABLE target_triple
-  OUTPUT_STRIP_TRAILING_WHITESPACE)
+set(jank_target_triple "" CACHE STRING "Target triple for generated AOT configuration")
+if(jank_target_triple)
+  set(target_triple "${jank_target_triple}")
+else()
+  separate_arguments(jank_target_cxx_flags NATIVE_COMMAND "${CMAKE_CXX_FLAGS}")
+  execute_process(
+    COMMAND "${CMAKE_CXX_COMPILER}" ${jank_target_cxx_flags} -print-target-triple
+    RESULT_VARIABLE target_triple_result
+    OUTPUT_VARIABLE target_triple
+    ERROR_VARIABLE target_triple_error
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+  if(NOT target_triple_result EQUAL 0 OR target_triple STREQUAL "")
+    message(FATAL_ERROR "Failed to query target triple (${target_triple_result}): ${target_triple_error}")
+  endif()
+endif()
 
 set(jank_lib_linker_flags_list "")
 

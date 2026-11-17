@@ -86,7 +86,7 @@ test('abort, runtime errors and rejected promises fail visibly', () => {
   }
 });
 
-function gameRunner({ output = '', wasm = true, currentScript } = {}) {
+function gameRunner({ output = '', wasm = true, jspi = true, currentScript } = {}) {
   const elements = Object.fromEntries(['stdout', 'status', 'app', 'canvas', 'game-message'].map(id => [id, { textContent: '' }]));
   const canvasListeners = {};
   elements.canvas.addEventListener = (name, callback) => { canvasListeners[name] = callback; };
@@ -101,7 +101,8 @@ function gameRunner({ output = '', wasm = true, currentScript } = {}) {
     createElement: () => ({}),
     body: { appendChild: script => scripts.push(script) }
   };
-  const context = vm.createContext({ document, URL, WebAssembly: wasm ? {} : undefined,
+  const context = vm.createContext({ document, URL,
+    WebAssembly: wasm ? (jspi ? { promising() {}, Suspending() {} } : {}) : undefined,
     window: { addEventListener: (name, callback) => { listeners[name] = callback; } } });
   vm.runInContext(gameSource, context);
   return { context, document, elements, listeners, scripts, canvasListeners };
@@ -115,12 +116,10 @@ test('the page version stamp reaches flappy-bird.js and flappy-bird.wasm', () =>
     'https://example.test/flappy-bird.wasm?v=abc123');
 });
 
-test('Flappy Bird requires both markers and a rendered frame', () => {
+test('Flappy Bird waits for a rendered frame without changing upstream stdout', () => {
   const page = gameRunner();
   assert.equal(page.scripts[0].src, 'flappy-bird.js');
   assert.equal(page.context.Module.canvas, page.elements.canvas);
-  page.context.Module.print('flappy-bird: rules passed');
-  page.context.Module.print('flappy-bird: initialized');
   assert.equal(page.document.documentElement.dataset.status, 'running');
   page.context.Module.onJankFrame({ frames: 1 });
   assert.equal(page.document.documentElement.dataset.status, 'pass');
@@ -130,14 +129,10 @@ test('Flappy Bird requires both markers and a rendered frame', () => {
   assert.equal(page.elements.status.textContent, 'running · wasm64 · frame 60');
 });
 
-test('Flappy Bird missing markers, unavailable Wasm and load failures fail visibly', () => {
-  for (const lines of [[], ['flappy-bird: initialized']]) {
-    const page = gameRunner();
-    lines.forEach(page.context.Module.print);
-    page.context.Module.onJankFrame({ frames: 1 });
-    assert.equal(page.document.documentElement.dataset.status, 'fail');
-    assert.match(page.elements.stdout.textContent, /Missing game initialization markers/);
-  }
+test('Flappy Bird unavailable Wasm or JSPI and load failures fail visibly', () => {
+  const unsupported = gameRunner({ jspi: false });
+  assert.equal(unsupported.scripts.length, 0);
+  assert.match(unsupported.elements['game-message'].textContent, /JSPI is unavailable/);
   const missing = gameRunner({ wasm: false });
   assert.equal(missing.scripts.length, 0);
   assert.match(missing.elements.stdout.textContent, /WebAssembly is unavailable/);
@@ -155,8 +150,6 @@ test('Flappy Bird runtime failures stay failed after subsequent frames', () => {
     page => page.listeners.unhandledrejection({ reason: 'rejection' })]) {
     const page = gameRunner();
     trigger(page);
-    page.context.Module.print('flappy-bird: rules passed');
-    page.context.Module.print('flappy-bird: initialized');
     page.context.Module.onJankFrame({ frames: 60 });
     assert.equal(page.document.documentElement.dataset.status, 'fail');
     assert.notEqual(page.elements.stdout.textContent, '');

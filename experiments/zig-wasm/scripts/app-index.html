@@ -10,8 +10,8 @@
 <script>
   const config = __PROJECT_CONFIG__;
   const canvas = document.getElementById('canvas');
-  canvas.hidden = !config.frame;
-  if (config.frame) {
+  canvas.hidden = !config.interactive;
+  if (config.interactive) {
     canvas.style.maxWidth = '100%';
     canvas.addEventListener('click', () => canvas.focus());
     canvas.addEventListener('keydown', event => {
@@ -38,7 +38,7 @@
     printErr: line => { console.error(line); },
     onAbort: reason => { write(reason); finish(false); },
     onExit: status => {
-      if (config.frame) { finish(false); return; }
+      if (config.interactive) { finish(false); return; }
       const count = marker => lines.filter(line => line === marker).length;
       const allLines = [...lines, ...document.getElementById('app').textContent.split('\n')];
       finish(status === 0 && config.expect.every(line => allLines.includes(line)) &&

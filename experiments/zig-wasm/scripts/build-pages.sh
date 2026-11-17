@@ -12,8 +12,8 @@ trap 'rm -rf "$STAGE"' EXIT
 cp site/index.html site/flappy-bird.html site/style.css site/runner.js site/flappy-bird-runner.js "$STAGE/"
 cp artifacts/app/live/wasm/live.js artifacts/app/live/wasm/live.wasm "$STAGE/"
 cp artifacts/app/flappy-bird/wasm/flappy-bird.js artifacts/app/flappy-bird/wasm/flappy-bird.wasm "$STAGE/"
-cp examples/flappy-bird/LICENSE "$STAGE/flappy-bird-LICENSE"
-cp examples/flappy-bird/src/org/jank_lang/example/flappy_bird.jank "$STAGE/flappy-bird.jank"
+cp examples/flappy-bird/vendor/LICENSE "$STAGE/flappy-bird-LICENSE"
+cp examples/flappy-bird/vendor/src/org/jank_lang/example/flappy_bird.jank "$STAGE/flappy-bird.jank"
 cargo build --quiet --release --locked --manifest-path tools/site-highlight/Cargo.toml \
   --target-dir "$ROOT/artifacts/site-highlight"
 artifacts/site-highlight/release/site-highlight "$STAGE/index.html"

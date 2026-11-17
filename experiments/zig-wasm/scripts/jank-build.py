@@ -373,6 +373,7 @@ def wasm_compile_flags(database):
 
 def build_wasm(project, stage, modules, launcher, run):
     deps = c_dependencies(project, 'wasm')
+    synchronous_raylib = 'raylib' in project.libraries and not project.frame
     target = ROOT / 'artifacts/build-wasm64'
     flags, cwd = wasm_compile_flags(json.loads((target / 'compile_commands.json').read_text()))
     flags.extend(deps.include_flags())
@@ -384,6 +385,8 @@ def build_wasm(project, stage, modules, launcher, run):
         namespace, function = project.frame.split('/')
         sources[-1] = (ROOT / 'scripts/frame-driver.cpp',
                        [f'-DJANK_FRAME_NS="{namespace}"', f'-DJANK_FRAME_FN="{function}"'])
+    elif synchronous_raylib:
+        sources[-1] = (ROOT / 'scripts/raylib-loop-driver.cpp', [])
     objects = []
     for index, (source, extra) in enumerate(sources):
         obj = stage / f'module-{index}.o'
@@ -403,6 +406,7 @@ def build_wasm(project, stage, modules, launcher, run):
                 f'-sEXIT_RUNTIME={0 if project.frame else 1}',
                 '-sSTACK_SIZE=4194304',
                 *objects, target / 'libjank-static-runtime.a', *deps.archives, *deps.link_flags,
+                *(['-sJSPI=1', '-Wl,--wrap=EndDrawing'] if synchronous_raylib else []),
                 '-Wl,--error-limit=0', '-o', js])
     run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm')])
     arguments = ['continuous', '20'] if project.wasm_check == 'spike-continuous' else ['static-roots']
@@ -411,6 +415,7 @@ def build_wasm(project, stage, modules, launcher, run):
     config = json.dumps({'expect': project.expected('browser'), 'arguments': arguments,
                          'continuous': project.wasm_check == 'spike-continuous',
                          'frame': project.frame,
+                         'interactive': bool(project.frame or 'raylib' in project.libraries),
                          'script': js.name}).replace('<', '\\u003c')
     page = (ROOT / 'scripts/app-index.html').read_text().replace('__PROJECT_CONFIG__', config)
     (output / 'index.html').write_text(page)

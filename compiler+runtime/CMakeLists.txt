@@ -224,6 +224,13 @@ set(
   "${CMAKE_BINARY_DIR}/core-libs/_cache/0/jank/nrepl/server/handler/lookup.o"
 )
 
+set(jank_include_nrepl ON)
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI" AND jank_cross_compile)
+  set(jank_include_nrepl OFF)
+  list(FILTER jank_other_core_sources EXCLUDE REGEX "/jank/nrepl/")
+  list(FILTER jank_nrepl_server_outputs EXCLUDE REGEX "/jank/nrepl/")
+endif()
+
 list(JOIN jank_nrepl_server_outputs " " jank_nrepl_server_outputs_str)
 if(jank_enable_phase_2)
   set(jank_core_lib_output_target --output-target cpp)
@@ -733,6 +740,9 @@ target_link_libraries(
   nanobench_lib
   bdwgc::gc bdwgc::gctba
 )
+if(NOT jank_include_nrepl)
+  target_compile_options(jank_common_lib PUBLIC -DJANK_NO_NREPL)
+endif()
 
 if(NOT EMSCRIPTEN AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
   target_link_libraries(jank_common_lib PRIVATE cpptrace::cpptrace)
@@ -1187,13 +1197,22 @@ else()
   set(jank_core_libs_deps ${jank_core_libs_compiler} ${jank_clojure_core_sources} ${jank_other_core_sources} ${jank_incremental_pch_flag})
 endif()
 
+if(jank_include_nrepl)
+  set(jank_other_core_commands
+    COMMAND ${jank_core_libs_compiler} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs ${jank_core_lib_output_target} jank.nrepl.server.core)
+else()
+  set(jank_other_core_commands
+    COMMAND ${jank_core_libs_compiler} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs ${jank_core_lib_output_target} clojure.string
+    COMMAND ${jank_core_libs_compiler} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs ${jank_core_lib_output_target} clojure.walk)
+endif()
+
 add_custom_command(
   DEPENDS ${jank_core_libs_deps}
   OUTPUT ${jank_core_libraries_flag}
   BYPRODUCTS ${jank_clojure_core_output} ${jank_nrepl_server_outputs}
   COMMAND ${jank_core_libs_compiler} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs --output-target object clojure.core
   COMMAND ${jank_core_libs_compiler} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs ${jank_core_lib_output_target} clojure.core
-  COMMAND ${jank_core_libs_compiler} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs ${jank_core_lib_output_target} jank.nrepl.server.core
+  ${jank_other_core_commands}
   COMMAND touch ${jank_core_libraries_flag}
 )
 add_custom_target(

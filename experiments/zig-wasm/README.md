@@ -2411,7 +2411,136 @@ before the raw-reference work and the native WASI follow-up below):
 | Pinned bdwgc | Non-threaded `alloc.c` compiles; threaded probe hits WASI signal emulation and `No multi-threading support yet`. |
 | Isolated threads/atomics, filesystem, dlopen, setjmp, Boost multiprecision | Objects compile; not proof of linking, host capabilities, JIT availability, or a runtime port. |
 
-### Native wasm32-wasip1 runtime attempt (wasi-sdk 34)
+### Native wasm32-wasip1: WASI-only nREPL exclusion follow-up
+
+This AI-assisted follow-up uses genuine **wasi-sdk 34.0 / wasm32-wasip1**,
+Zig 0.17.1, stock Binaryen 133 and Wasmtime 50.0.2. The full runtime archive
+and jank/Zig spike now **compile and link**. The next blocker is Binaryen's
+post-link `--flatten` pass, not nREPL capture. **Neither Zig marker has been
+reached on this genuine WASI path.** The older capture-boundary evidence is
+preserved in the historical subsection below; the Emscripten/shim results
+elsewhere are not a native WASI execution result.
+
+**Inspection and bounded fixes:**
+
+- Only `CMAKE_SYSTEM_NAME=WASI` with `jank_cross_compile=ON` disables nREPL.
+  CMake removes all 13 server modules from generation, dependencies, phase-2
+  sources and archive inputs. `clojure.string` and `clojure.walk` are generated
+  explicitly instead of transitively through nREPL. Build-selected
+  `JANK_NO_NREPL` also removes the server load registrations and core-module
+  metadata. Capture semantics are not stubbed or changed.
+- The build-local Folly patch selects its existing no-vDSO and no-atfork paths
+  on WASI: Preview 1 has neither Linux's dynamic vDSO nor process forking.
+  This fixes `dlopen`/`dlsym`/`dlclose` and `pthread_atfork` link errors without
+  adding substitute symbols or modifying the submodule pin.
+- jtl assertion/panic reporting excludes cpptrace on WASI, reports unsupported
+  stack traces and still aborts. Native and Emscripten branches are unchanged.
+- The shared startup driver now compiles WASI static-root registration of
+  `__global_base..__data_end`. The linker places the 4 MiB diagnostic stack
+  before static data (`--stack-first`), matching BDWGC's inspected WASI
+  `STACKBOTTOM=__global_base`, and exports stack/static bounds for Binaryen.
+  This is preparation, **not verified WASI rooting/GC correctness**.
+
+**Reproduction:** from this directory, in the documented Ubuntu 24.04 container
+with LLVM 23.1.6/Boost prerequisites and the pinned Zig tool already available:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh host
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh spike
+for step in deps configure build; do
+  docker exec --user 1000:1000 jank-host-build bash scripts/build-wasi32-target.sh "$step" || break
+done
+# Expected exit 134 at flatten after successful SDK compile/link:
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasi32-target.sh spike
+# Independent archive verification and tiny transformer-failure reproduction:
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasi32-target.sh verify
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasi32-target.sh spill-probe
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+# Emscripten wasm32 shared-source/script regression, stock Binaryen 133:
+for step in configure build startup-spill; do
+  docker exec --user 1000:1000 -e WASM_BITS=32 \
+    -e SPILL_WASM_OPT=/home/ubuntu/repos/jank/experiments/zig-wasm/.tools/gc-wasm/emsdk/upstream/bin/wasm-opt \
+    jank-host-build bash scripts/build-wasm64-target.sh "$step" || break
+done
+```
+
+**Compile:** complete `jank_standalone_static_lib_phase_2` succeeds, including
+generated core/string/walk. The spike's generated launcher, unchanged jank
+module, startup driver and Zig `wasm32-wasi` object also compile. `build` now
+checks defined **and undefined** archive symbols, literal module metadata,
+generated build edges and ar-merge inputs, and requires the three remaining
+Clojure load entry points. `verify` reruns that check independently:
+
+```text
+WASI AOT archive: core/string/walk present; no nREPL symbols, metadata or generated build inputs
+EXIT=0
+```
+
+**Link:** the real SDK linker produces
+`artifacts/wasi32-spike/spike-unspilled.wasm`, with undefined symbols treated
+as errors, `-fwasm-exceptions -lunwind -lwasi-emulated-mman`, target zlib and
+the genuine target runtime archive. No Emscripten object, ABI shim or host
+LLVM/zstd library is supplied. Logs are `artifacts/logs/wasi/wasi32-spike-*.log`.
+
+**Post-link flatten/spill blocker:** stock Binaryen 133 aborts before spilling:
+
+```text
+unexpected expr type
+UNREACHABLE executed at /src/src/passes/Flatten.cpp:231!
+EXIT=134
+```
+
+`wasi32-spike-spill.log` has the full-module failure (parallel diagnostics
+interleave); `wasi32-spill-probe.log` has the same failure on the seven-line
+`wasi-probe/flatten-try-table.wat` reduction. The linked module contains 559
+`try_table` instructions, including in `std::__2::to_chars(char*, char*, float)`;
+SDK `eh/libc++.a:charconv.cpp.o` defines that function. Flatten handles legacy
+`Try`, not `TryTable`, and also has an explicit unsupported-instruction check
+for the latter. This is therefore a transformer failure, not a runtime or GC
+execution error. Translating to exnref first introduces more `try_table`s;
+it does not remove the existing ones. Inspection of the private memory64
+patch shows it does not add TryTable support to Flatten either.
+
+The next timebox boundary is a compatible EH library/transformer pipeline or
+real standardized-EH flatten/spill support, not dropping exceptions, skipping
+spill, disabling GC or substituting runtime symbols. Neither SDK libraries
+nor Binaryen were patched to disguise this failure.
+
+**Execution:** not reached on Wasmtime: no jank startup or marker output.
+The `spike` script requests flatten/spill, exnref translation and Wasmtime
+`-W exceptions=y` with GC on and 20 continuous iterations. The transform
+failure prevents reaching translation/execution; those stages are unverified.
+The output validator requires both markers in every iteration, collections
+advancing and `gc-disabled=0`, not merely a zero process exit.
+
+**Correctness and regressions:** after the shared changes, native `jank-test`:
+
+```text
+tested 870 jank files with 9 skips and 0 failures
+[doctest] test cases:  130 |  130 passed | 0 failed | 0 skipped
+[doctest] assertions: 2053 | 2053 passed | 0 failed |
+[doctest] Status: SUCCESS!
+```
+
+Emscripten wasm32 was reconfigured/rebuilt (including nREPL). Stock Binaryen
+startup-spill again prints both markers with GC enabled:
+
+```text
+jank -> Zig: scalar and wide result checks passed
+jank -> Zig: borrowed-buffer checks passed
+startup diagnostic: exit=0 collections=12 gc-disabled=0
+STARTUP VERDICT: mode=continuous PASS iterations=20 passed=20 failed=0 exit=0
+STARTUP SPILL VERDICT: PASS
+```
+
+Native and both Emscripten build graphs retain nREPL and omit `JANK_NO_NREPL`;
+wasm64 execution was not rerun this round. Compile/link success and the
+isolated controls below establish no WASI runtime/GC, threading, filesystem
+or exception-lifetime correctness. No general WASI-support claim is made.
+
+### Historical native wasm32-wasip1 runtime attempt (wasi-sdk 34)
+
+The follow-up above supersedes this earlier capture-blocked build result.
 
 This separate AI-assisted attempt uses **wasi-sdk 34.0 targeting
 `wasm32-wasip1`**, not Emscripten, injected platform macros, or the wasm64 ABI

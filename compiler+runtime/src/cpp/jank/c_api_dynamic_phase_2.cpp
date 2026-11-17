@@ -14,6 +14,7 @@ extern "C"
   void jank_load_clojure_core();
   void jank_load_clojure_string();
   void jank_load_clojure_walk();
+#ifndef JANK_NO_NREPL
   void jank_load_jank_nrepl_server_core();
   void jank_load_jank_nrepl_server_inspect();
   void jank_load_jank_nrepl_server_handler();
@@ -28,12 +29,14 @@ extern "C"
   void jank_load_jank_nrepl_server_handler_completions();
   void jank_load_jank_nrepl_server_handler_eval();
   void jank_load_jank_nrepl_server_handler_lookup();
+#endif
 
   void jank_init_core_libs()
   {
     jank::runtime::__rt_ctx->module_loader.add_load_fn("clojure.core", &jank_load_clojure_core);
     jank::runtime::__rt_ctx->module_loader.add_load_fn("clojure.string", &jank_load_clojure_string);
     jank::runtime::__rt_ctx->module_loader.add_load_fn("clojure.walk", &jank_load_clojure_walk);
+#ifndef JANK_NO_NREPL
     jank::runtime::__rt_ctx->module_loader.add_load_fn("jank.nrepl.server.core",
                                                        &jank_load_jank_nrepl_server_core);
     jank::runtime::__rt_ctx->module_loader.add_load_fn("jank.nrepl.server.inspect",
@@ -62,5 +65,6 @@ extern "C"
                                                        &jank_load_jank_nrepl_server_handler_eval);
     jank::runtime::__rt_ctx->module_loader.add_load_fn("jank.nrepl.server.handler.lookup",
                                                        &jank_load_jank_nrepl_server_handler_lookup);
+#endif
   }
 }

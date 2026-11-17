@@ -44,6 +44,7 @@ namespace jank::runtime::obj
     /* behavior::sequence_like */
     object_ref first() const override;
     object_ref next() const override;
+    object_ref more() const;
 
     /* behavior::conjable */
     obj::cons_ref conj(object_ref const head) const;
@@ -54,6 +55,7 @@ namespace jank::runtime::obj
     /* behavior::chunkable */
     object_ref chunked_first() const;
     object_ref chunked_next() const;
+    object_ref chunked_more() const;
 
     /*** XXX: Everything here is immutable after initialization. ***/
     object_ref head{};

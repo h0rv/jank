@@ -24,6 +24,7 @@ namespace jank::runtime::obj
     native_vector_sequence(native_vector<object_ref> &&data);
     native_vector_sequence(object_ref const meta, native_vector<object_ref> &&data);
     native_vector_sequence(native_vector<object_ref> &&data, usize index);
+    native_vector_sequence(jtl::ref<native_vector<object_ref> const> data, usize index);
 
     /* behavior::object_like */
     bool equal(object const &o) const override;
@@ -55,7 +56,7 @@ namespace jank::runtime::obj
     void set_meta(object_ref const o);
 
     /*** XXX: Everything here is immutable after initialization. ***/
-    native_vector<object_ref> data{};
+    jtl::ref<native_vector<object_ref> const> data;
     usize index{};
 
     /*** XXX: Everything here is thead-safe. ***/

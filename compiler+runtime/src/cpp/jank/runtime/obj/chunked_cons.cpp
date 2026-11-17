@@ -1,4 +1,5 @@
 #include <jank/runtime/obj/chunked_cons.hpp>
+#include <jank/runtime/obj/persistent_list.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/core/make_box.hpp>
 #include <jank/runtime/core/seq.hpp>
@@ -74,7 +75,7 @@ namespace jank::runtime::obj
           {
             return make_box<chunked_cons>(typed_head->chunk_next(), tail);
           }
-          return tail;
+          return runtime::seq(tail);
         }
         else
         {
@@ -86,24 +87,32 @@ namespace jank::runtime::obj
       head);
   }
 
-  static chunked_cons_ref next_in_place_non_chunked(chunked_cons_ref const o)
+  object_ref chunked_cons::more() const
   {
-    auto const tail{ o->tail };
-    if(tail.is_nil())
-    {
-      return {};
-    }
-
-    o->head = tail.first();
-    o->tail = tail.next();
-    return o;
+    return visit_object(
+      [&](auto const typed_head) -> object_ref {
+        using T = typename decltype(typed_head)::value_type;
+        if constexpr(behavior::chunk_like<T>)
+        {
+          if(1 < typed_head->count())
+          {
+            return make_box<chunked_cons>(typed_head->chunk_next(), tail);
+          }
+          return chunked_more();
+        }
+        else
+        {
+          throw std::runtime_error{ "The `chunked_cons` head is not chunk-like." };
+        }
+      },
+      head);
   }
 
   object_ref chunked_cons::next_in_place()
   {
     /* TODO: Port visit_object: chunk_like. */
     return visit_object(
-      [&](auto const typed_head) -> chunked_cons_ref {
+      [&](auto const typed_head) -> object_ref {
         using T = typename decltype(typed_head)::value_type;
 
         if constexpr(behavior::chunk_like<T>)
@@ -113,11 +122,11 @@ namespace jank::runtime::obj
             head = typed_head->chunk_next();
             return runtime::detail::untagged(this);
           }
-          return next_in_place_non_chunked(runtime::detail::untagged(this));
+          return runtime::seq(tail);
         }
         else
         {
-          return next_in_place_non_chunked(runtime::detail::untagged(this));
+          throw std::runtime_error{ "The `chunked_cons` head is not chunk-like." };
         }
       },
       head);
@@ -146,7 +155,12 @@ namespace jank::runtime::obj
 
   object_ref chunked_cons::chunked_next() const
   {
-    return tail;
+    return runtime::seq(tail);
+  }
+
+  object_ref chunked_cons::chunked_more() const
+  {
+    return tail.is_nil() ? object_ref{ persistent_list::empty() } : tail;
   }
 
   bool chunked_cons::equal(object const &o) const

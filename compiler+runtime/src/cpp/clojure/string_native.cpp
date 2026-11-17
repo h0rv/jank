@@ -13,6 +13,7 @@
 #include <jank/runtime/obj/persistent_vector.hpp>
 #include <jank/runtime/obj/re_pattern.hpp>
 #include <jank/runtime/rtti.hpp>
+#include <jank/runtime/sequence_range.hpp>
 #include <jank/util/fmt.hpp>
 #include <jank/util/string.hpp>
 
@@ -44,6 +45,25 @@ namespace clojure::string_native
   bool includes(jtl::immutable_string const &s, jtl::immutable_string const &substr)
   {
     return s.contains(substr);
+  }
+
+  jtl::immutable_string join(jtl::immutable_string const &separator, object_ref const coll)
+  {
+    jtl::string_builder buff;
+    bool first{ true };
+    for(auto const e : make_sequence_range(coll))
+    {
+      if(!first)
+      {
+        buff(separator);
+      }
+      if(!is_nil(e))
+      {
+        e.to_string(buff);
+      }
+      first = false;
+    }
+    return buff.release();
   }
 
   static jtl::immutable_string replace_first(jtl::immutable_string const &s,

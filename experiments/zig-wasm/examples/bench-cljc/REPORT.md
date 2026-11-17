@@ -6,6 +6,9 @@ not a claim of general Wasm support. All kernels live in
 clock implementation and the ClojureScript CLI entry hook. `timing.cpp` adds
 timing boundaries and GC policy, not alternate kernel implementations.
 
+The environment/results/interpretation below preserve the original baseline.
+See [Optimisations](#optimisations) for the subsequent runtime fixes and results.
+
 ## Reproduce
 
 From the repository root on Linux x86_64 with Docker, Python 3, curl, tar, and
@@ -37,7 +40,7 @@ statuses, exact checksums, all ten samples), `results.md` (tables), and
 `--targets cljs-js native wasm64-spill` selects a subset; `--skip-build` reuses
 existing artifacts and must only be used with unchanged source/toolchains.
 
-**The complete measured run exits 1**, intentionally: unsafe no-spill runs out
+**The original baseline run exits 1**, intentionally: unsafe no-spill runs out
 of memory. Successful targets remain recorded; failed targets are not silently
 discarded. An exit-0 jank executable is not a correctness pass. The parser
 requires all six checksum lines, ten finite nonnegative samples each, matching
@@ -185,3 +188,95 @@ exception payload lifetime and does not prove complete root discovery. The
 ordinary unmodified Wasm startup remains unsupported. Passing these six
 checksums is bounded evidence for this workload, not a general GC-safety or
 Wasm-support claim.
+
+## Optimisations
+
+Profiling used isolated kernels from the same generated benchmark. Native
+`perf record -g` was blocked (`perf_event_paranoid=4`; container
+`perf_event_open`: `Operation not permitted`), so native attribution uses
+**Callgrind executed-instruction shares, not sampled CPU-time shares**. Wasm
+used Node `--cpu-prof` with readable function names. Raw evidence and top-symbol
+tables remain in the ignored `artifacts/bench-cljc/profile/PROFILE_TOPS.md`.
+
+The profiles identified three allocation defects: `join` rebuilt the accumulated
+prefix on every element; sorted-result traversal copied the complete backing
+vector at each step; and integer ranges bypassed existing chunked map/filter
+paths. Native sort traversal accounted for 96.91% inclusive instructions,
+whereas sorting itself accounted for 2.02%. These are overlapping inclusive
+shares, not additive costs. Numeric fib allocated zero GC bytes and recursed
+directly, so allocation and recursive Var lookup were not its explanation.
+
+The following are before/after **warm medians in milliseconds (10 samples)**
+for each fix's affected kernel, with fixes applied cumulatively:
+
+| Fix / kernel | Native before → after | Spill-Wasm before → after | Implementation commit |
+| --- | ---: | ---: | --- |
+| Single-builder join / strings1k | 1.495 → 0.381 | 6.413 → 1.858 | `847b23b95` |
+| Shared native-vector sequence backing / sort5k | 32.952 → 4.590 | 66.372 → 14.444 | `105b5c43c` |
+| Chunked integer range + lazy chunk tails / lazy100k | 45.247 → 10.972 | 157.918 → 55.793 | `aa74f70db` |
+
+The join comparison starts with the original baseline; the other comparisons
+use the immediately preceding fix's run. These are individual full benchmark
+runs, not controlled same-base A/B trials or confidence intervals. Unchanged
+kernels also vary with heap state, system load and JIT effects.
+
+The third fix uses chunks of at most 32 integers and overflow-safe stepping.
+It also repairs existing `chunk_cons` eager tail realization: construction,
+`rest` and `chunk-rest` preserve the unrealized tail; `next`, `chunk-next` and
+terminal `next_in_place` sequence it only when traversed. Existing non-integer
+ranges remain unchanged. Persistent-vector sequences in this checkout are not
+chunkable; tests cover ordinary vector pipelines and explicitly chunked
+vector-backed pipelines rather than adding vector chunking. Relevant results:
+
+```text
+[doctest] test cases:  11 |  11 passed | 0 failed | 126 skipped
+[doctest] assertions: 979 | 979 passed | 0 failed |
+[doctest] Status: SUCCESS!
+Ran 17 tests containing 608 assertions.
+0 failures, 0 errors.
+INTEGER RANGE TESTS PASS
+```
+
+After rebuilding native and wasm64 and rerunning the full `measure.py`, all
+four targets compiled, linked/transformed, exited 0 and passed every checksum:
+`BENCHMARK VERDICT: PASS`. In particular, unsafe no-spill now completes with
+its existing GC-disabled policy and 4 MiB stack; the baseline OOM above is a
+historical result, not the current verdict. This remains an unsafe diagnostic
+variant, not evidence for GC safety or general Wasm support. Current warm
+medians for all kernels are:
+
+| Kernel | cljs-js | Native | wasm64-spill | wasm64-unsafe (GC off) |
+| --- | ---: | ---: | ---: | ---: |
+| fib27 | 7.070 | 1.190 | 78.660 | 3.117 |
+| vector100k | 9.332 | 17.262 | 49.826 | 26.634 |
+| map100k | 39.169 | 46.699 | 115.720 | 85.533 |
+| lazy100k | 2.862 | 10.972 | 55.793 | 27.464 |
+| strings1k | 0.081 | 0.283 | 1.738 | 1.037 |
+| sort5k | 1.125 | 1.671 | 9.444 | 5.759 |
+
+`GC_get_total_bytes()` around ten lazy100k invocations after one warmup, GC
+enabled on both targets, measured **22,350,382.4 bytes/invocation native** and
+**22,350,736.0 bytes/invocation spill-Wasm**, down from approximately 101.6 MB
+(about 78%). The harness checksums remained `2500050000.0`:
+
+```text
+native: PROFILE count=10 ms=151.794182 bytes=223503824 checksum=2500050000.0 gc-disabled=0
+spill:  PROFILE count=10 ms=579.165332 bytes=223507360 checksum=2500050000.0 gc-disabled=0
+```
+
+Allocated bytes are not retained heap. Sort allocation after the second fix
+was approximately 6.06 MB/invocation, down from 206.18 MB (97.06%). Evidence
+for this follow-up is in ignored `artifacts/logs/integer-range-*.log` and
+`artifacts/bench-cljc/results.{json,md}`. Benchmark metadata records parent
+`105b5c43c`; the run used the changes committed as `aa74f70db`.
+
+Remaining work: the matched-GC-off profiling comparison measured fib at
+3.202 ms unsafe versus 76.673 ms spill, an estimated **95.8% incremental
+flatten/spill/coalesce-pipeline fraction** (`1 - unsafe/spill`). This includes
+V8 compilation effects, not just spill-store instructions. Typed arithmetic
+and GC-aware spill elimination are the appropriate next compiler/rooting
+project; no unsafe function-name-based spill exemption was added. Lazy
+pipeline allocation remains substantial even after chunking, including
+chunk buffers, sequence traversal and closures. `reduce` still has an explicit
+chunking TODO and traverses element-by-element; this change enables the
+existing map/filter chunked paths, not a new reduction implementation.

@@ -340,6 +340,10 @@ namespace jank::runtime
 
   object_ref more(object_ref const s)
   {
+    if(s.get_type() == object_type::chunked_cons)
+    {
+      return expect_object<obj::chunked_cons>(s)->more();
+    }
     if(s.get_type() == object_type::cons)
     {
       return expect_object<obj::cons>(s)->tail;
@@ -1041,6 +1045,10 @@ namespace jank::runtime
 
         if constexpr(behavior::chunkable<T>)
         {
+          if constexpr(requires { typed_o->chunked_more(); })
+          {
+            return typed_o->chunked_more();
+          }
           auto const ret{ typed_o->chunked_next() };
           if(ret.is_nil())
           {
@@ -1058,7 +1066,7 @@ namespace jank::runtime
 
   object_ref chunk_cons(object_ref const chunk, object_ref const rest)
   {
-    return make_box<obj::chunked_cons>(chunk, seq(rest));
+    return make_box<obj::chunked_cons>(chunk, rest);
   }
 
   bool is_chunked_seq(object_ref const o)

@@ -8,6 +8,7 @@
 namespace jank::runtime::obj
 {
   using cons_ref = oref<struct cons>;
+  using array_chunk_ref = oref<struct array_chunk>;
   using integer_range_ref = oref<struct integer_range>;
   using persistent_list_ref = oref<struct persistent_list>;
 
@@ -21,6 +22,7 @@ namespace jank::runtime::obj
                                                     | object_behavior::sequence_like_in_place };
     static constexpr bool pointer_free{ false };
     static constexpr bool is_sequential{ true };
+    static constexpr usize chunk_size{ 32 };
 
     using bounds_check_t = bool (*)(i64 const, i64 const);
 
@@ -32,12 +34,6 @@ namespace jank::runtime::obj
     integer_range(i64 const start, i64 const end);
     integer_range(i64 const start, i64 const end, i64 const step);
     integer_range(i64 const start, i64 const end, i64 const step, bounds_check_t bounds_check);
-    //integer_range(integer_ptr start,
-    //              integer_ptr end,
-    //              integer_ptr step,
-    //              bounds_check_t bounds_check,
-    //              array_chunk_ptr chunk,
-    //              integer_range_ptr chunk_next);
 
     static object_ref create(i64 const end);
     static object_ref create(i64 const start, i64 const end);
@@ -61,10 +57,10 @@ namespace jank::runtime::obj
     /* behavior::sequence_like_in_place */
     object_ref next_in_place() override;
 
-    /* TODO: behavior::chunkable */
-    /* array_chunk_ptr chunked_first() const; */
-    /* integer_range_ptr chunked_next() const; */
-    /* void force_chunk() const; */
+    /* behavior::chunkable */
+    array_chunk_ref chunked_first() const;
+    integer_range_ref chunked_next() const;
+    object_ref chunked_more() const;
 
     /* behavior::conjable */
     cons_ref conj(object_ref const head) const;
@@ -86,10 +82,6 @@ namespace jank::runtime::obj
     i64 step{ 1 };
     bounds_check_t bounds_check{};
 
-    /* TODO: behavior::chunkable */
-    /* mutable array_chunk_ptr chunk{}; */
-    /* mutable integer_range_ptr chunk_next{}; */
-    /* mutable integer_range_ptr cached_next{}; */
     lazy_meta meta{};
   };
 }

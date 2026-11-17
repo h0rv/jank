@@ -1,4 +1,4 @@
-"""AI-assisted cost probe. Run inside jank-host-build after ./jank-zig build."""
+"""AI-assisted spike cost probe. Run inside jank-host-build after ./jank-build build."""
 import gzip
 import hashlib
 import json
@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 
-def parse_sample(output: str, wasm: bool, disabled: bool) -> tuple[float, float | None, float]:
+def parse_sample(output: str, wasm: bool, disabled: bool) -> tuple[float, float | None, float, int, int]:
     for marker in ['jank -> Zig: scalar and wide result checks passed',
                    'jank -> Zig: borrowed-buffer checks passed']:
         if output.splitlines().count(marker) != 2:
@@ -27,19 +27,28 @@ def parse_sample(output: str, wasm: bool, disabled: bool) -> tuple[float, float 
     first_entry = re.search(r'^FIRST_ENTRY ms=([\d.]+)$', output, re.M)
     if first_entry is None:
         raise ValueError('Missing first-entry record')
-    return float(timing[1]), float(startup[1]) if startup else None, float(first_entry[1])
+    gc = re.search(r'^FIRST_ENTRY_GC collections=(\d+) ms=(\d+)$', output, re.M)
+    if gc is None or (disabled and (int(gc[1]) != 0 or timing[2] != timing[3])):
+        raise ValueError('Missing GC measurement')
+    return (float(timing[1]), float(startup[1]) if startup else None,
+            float(first_entry[1]), int(gc[1]), int(gc[2]))
 
 
 if sys.argv[1:] == ['--self-test']:
     fixture = ('jank -> Zig: scalar and wide result checks passed\n'
                'jank -> Zig: borrowed-buffer checks passed\n') * 2
     record = 'COST ns-per-call=123.0 collections-before=1 collections-after=1 gc-disabled=1\n'
-    valid = fixture + record + 'STARTUP ms=20.0\nFIRST_ENTRY ms=100.0\n'
-    assert parse_sample(valid, True, True) == (123.0, 20.0, 100.0)
+    valid = fixture + record + 'STARTUP ms=20.0\nFIRST_ENTRY ms=100.0\nFIRST_ENTRY_GC collections=0 ms=0\n'
+    assert parse_sample(valid, True, True) == (123.0, 20.0, 100.0, 0, 0)
+    assert parse_sample(valid.replace('STARTUP ms=20.0\n', ''), False, True) == (
+        123.0, None, 100.0, 0, 0)
     for invalid in ['', fixture, valid.replace('passed', 'failed'),
                     valid.replace('gc-disabled=1', 'gc-disabled=0'),
                     valid.replace('STARTUP ms=20.0\n', ''),
-                    valid.replace('FIRST_ENTRY ms=100.0\n', '')]:
+                    valid.replace('FIRST_ENTRY ms=100.0\n', ''),
+                    valid.replace('FIRST_ENTRY_GC collections=0', 'FIRST_ENTRY_GC collections=1'),
+                    valid.replace('collections-after=1', 'collections-after=2'),
+                    valid.replace('FIRST_ENTRY_GC collections=0 ms=0\n', '')]:
         try:
             parse_sample(invalid, True, True)
         except ValueError:
@@ -47,8 +56,9 @@ if sys.argv[1:] == ['--self-test']:
         raise AssertionError('Accepted invalid sample')
     print('SPILL COST SELF-TEST: PASS (normal, empty, missing records, markers, GC state)')
     sys.exit(0)
-if sys.argv[1:]:
-    sys.exit('Usage: measure-spill-cost.py [--self-test]')
+compare_startup = sys.argv[1:] == ['--compare-startup']
+if sys.argv[1:] and not compare_startup:
+    sys.exit('Usage: measure-spill-cost.py [--self-test|--compare-startup]')
 
 ROOT = Path(__file__).resolve().parents[1]
 os.chdir(ROOT)
@@ -59,8 +69,7 @@ os.environ['EM_CONFIG'] = str(SDK / '.emscripten')
 os.environ['ZIG_GLOBAL_CACHE_DIR'] = str(ROOT / '.zig-cache/global')
 NODE = ROOT / '.tools/node-v26.13.1-linux-x64/bin/node'
 ZIG = ROOT / '.tools/zig-x86_64-linux-0.17.1/zig'
-APP = ROOT / 'artifacts/app/source'
-VERSION = (ROOT / 'artifacts/wasm64-spike/host-version').read_text().strip()
+APP = ROOT / 'artifacts/app/spike'
 
 
 def run(args: list[str | Path]) -> None:
@@ -85,19 +94,23 @@ def flags(build: Path) -> list[str]:
 
 
 for target, build in [('native', 'build-target'), ('wasm', 'build-wasm64')]:
+    stage = APP / f'stage-{target}'
+    modules = list((stage / 'target/_cache').glob('*/spike/core.cpp'))
+    if len(modules) != 1 or not (stage / 'main.cpp').is_file():
+        sys.exit(f'Missing/ambiguous spike sources in {stage}; run ./jank-build build first')
     build_dir = ROOT / 'artifacts' / build
     compile_flags = flags(build_dir)
     objects = []
     for source, label, extra in [
-        (ROOT / 'artifacts/wasm64-spike/main.cpp', 'main', ['-Dmain=jank_spike_main']),
-        (APP / f'jank/target/_cache/{VERSION}/spike/core.cpp', 'core', []),
+        (stage / 'main.cpp', 'main', ['-Dmain=jank_spike_main']),
+        (modules[0], 'core', []),
         (ROOT / 'wasm-probe/spill-cost.cpp', 'driver', []),
     ]:
         obj = OUT / f'{target}-{label}.o'
         run([*compile_flags, '-O2', '-g', *extra, '-c', source, '-o', obj])
         objects.append(obj)
     zig = OUT / f'{target}-zig.o'
-    run([ZIG, 'build-obj', APP / 'native.zig', '-O', 'ReleaseSafe',
+    run([ZIG, 'build-obj', stage / 'native.zig', '-O', 'ReleaseSafe',
          *(['-target', 'wasm64-freestanding'] if target == 'wasm' else []),
          f'-femit-bin={zig}', '--cache-dir', ROOT / '.zig-cache'])
     if target == 'native':
@@ -117,20 +130,27 @@ optimizer = ROOT / 'artifacts/build-binaryen/bin/wasm-opt'
 patch_digest = hashlib.sha256((ROOT / 'wasm-probe/binaryen-memory64-stack.patch').read_bytes()).hexdigest()
 if (optimizer.parent / 'jank-memory64-patch.sha256').read_text() != patch_digest:
     sys.exit('Binaryen patch stamp is stale; refresh it with ./jank-zig build first')
-for variant in ['plain', 'spill']:
+for variant in ['plain', *(['spill-before'] if compare_startup else []), 'spill']:
     shutil.copyfile(OUT / 'base.wasm', OUT / f'{variant}.wasm')
     if variant == 'spill':
         run([sys.executable, ROOT / 'wasm-probe/spill-pointers.py', ROOT, OUT / 'spill.wasm'])
+    elif variant == 'spill-before':
+        run([optimizer, OUT / 'base.wasm', *features, '--flatten', '--spill-pointers', '-g',
+             '-o', OUT / 'spill-before.wasm'])
     run([optimizer, OUT / f'{variant}.wasm', *features, '--strip-debug',
          '-o', OUT / f'{variant}.stripped.wasm'])
     (OUT / f'{variant}.js').write_text((OUT / 'base.js').read_text().replace('base.wasm', f'{variant}.wasm'))
 
 rows = []
 for variant, mode in [('native', 'continuous'), ('plain', 'no-gc'),
+                      *([('spill-before', 'no-gc'), ('spill-before', 'continuous')]
+                        if compare_startup else []),
                       ('spill', 'no-gc'), ('spill', 'continuous')]:
     samples = []
     startups = []
     first_entries = []
+    gc_collections = []
+    gc_times = []
     binary = OUT / ('native' if variant == 'native' else f'{variant}.wasm')
     for sample in range(7):
         args = [binary, mode] if variant == 'native' else [NODE, OUT / f'{variant}.js', mode]
@@ -138,9 +158,12 @@ for variant, mode in [('native', 'continuous'), ('plain', 'no-gc'),
         output = result.stdout + result.stderr
         (OUT / f'{variant}-{mode}-{sample}.log').write_text(output)
         result.check_returncode()
-        timing, startup, first_entry = parse_sample(output, variant != 'native', mode == 'no-gc')
+        timing, startup, first_entry, collections, gc_ms = parse_sample(
+            output, variant != 'native', mode == 'no-gc')
         samples.append(timing)
         first_entries.append(first_entry)
+        gc_collections.append(collections)
+        gc_times.append(gc_ms)
         if startup is not None:
             startups.append(startup)
     row = dict(variant=variant, mode=mode, bytes=binary.stat().st_size,
@@ -149,6 +172,7 @@ for variant, mode in [('native', 'continuous'), ('plain', 'no-gc'),
                if variant != 'native' else None,
                startup_ms=statistics.median(startups) if startups else None,
                first_entry_ms=statistics.median(first_entries), samples_first_entry_ms=first_entries,
+               first_entry_gc_collections=gc_collections, first_entry_gc_ms=statistics.median(gc_times),
                ns_per_call=statistics.median(samples), samples_ns=samples,
                samples_startup_ms=startups, correctness='PASS')
     rows.append(row)

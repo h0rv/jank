@@ -18,11 +18,17 @@ int main(int argc, char const **argv)
   GC_add_roots(&__global_base, &__data_end);
 #endif
   if(argc > 1 && std::strcmp(argv[1], "no-gc") == 0) { GC_disable(); }
+  GC_start_performance_measurement();
+  auto const init_collections{ GC_get_gc_no() };
+  auto const init_gc_ms{ GC_get_full_gc_total_time() };
   auto const init_start{ std::chrono::steady_clock::now() };
   if(jank_spike_main(argc, argv)) { return 1; }
   auto const init_end{ std::chrono::steady_clock::now() };
   std::printf("FIRST_ENTRY ms=%.6f\n",
     std::chrono::duration<double, std::milli>(init_end - init_start).count());
+  std::printf("FIRST_ENTRY_GC collections=%zu ms=%lu\n",
+    static_cast<size_t>(GC_get_gc_no() - init_collections),
+    GC_get_full_gc_total_time() - init_gc_ms);
   auto call = [] { jank_call0(jank_deref(jank_var_intern_c("spike.core", "-main"))); };
   std::fflush(stdout);
   int const saved{ dup(STDOUT_FILENO) };

@@ -1,4 +1,6 @@
-#include <cpptrace/basic.hpp>
+#ifndef __EMSCRIPTEN__
+  #include <cpptrace/basic.hpp>
+#endif
 
 #include <jank/runtime/obj/exception_info.hpp>
 #include <jank/runtime/obj/persistent_array_map.hpp>
@@ -26,6 +28,7 @@ namespace jank::runtime::obj
   {
   }
 
+#ifndef __EMSCRIPTEN__
   static persistent_vector_ref frame_to_vec(cpptrace::stacktrace_frame const &frame)
   {
     runtime::detail::native_transient_vector trans;
@@ -34,6 +37,8 @@ namespace jank::runtime::obj
     trans.push_back(make_box(frame.line.value_or(1)));
     return make_box<obj::persistent_vector>(trans.persistent());
   }
+
+#endif
 
   static persistent_hash_map_ref cause_to_via(exception_info_ref const e)
   {
@@ -46,10 +51,12 @@ namespace jank::runtime::obj
     runtime::detail::native_transient_hash_map trans{};
     trans.set(message_kw, make_box(e->message));
     trans.set(data_kw, e->data);
+#ifndef __EMSCRIPTEN__
     if(e->resolved_trace)
     {
       trans.set(at_kw, frame_to_vec(e->resolved_trace->frames.at(0)));
     }
+#endif
 
     return make_box<obj::persistent_hash_map>(trans.persistent());
   }
@@ -82,6 +89,7 @@ namespace jank::runtime::obj
       util::format_to(sb, "\n  {}", cause_to_via(cause).to_code_string());
     }
     util::format_to(sb, "]\n");
+#ifndef __EMSCRIPTEN__
     if(resolved_trace)
     {
       util::format_to(sb, " :trace\n [");
@@ -99,11 +107,15 @@ namespace jank::runtime::obj
       }
       util::format_to(sb, "]}");
     }
+#else
+    util::format_to(sb, " :trace []}}");
+#endif
     return sb.release();
   }
 
   void exception_info::resolve()
   {
+#ifndef __EMSCRIPTEN__
     if(resolved_trace.get() || !raw_trace)
     {
       return;
@@ -111,6 +123,7 @@ namespace jank::runtime::obj
 
     resolved_trace = std::make_unique<cpptrace::stacktrace>(util::resolve(*raw_trace));
     raw_trace.reset();
+#endif
   }
 
   obj::persistent_array_map_ref exception_info::to_map() const
@@ -136,6 +149,7 @@ namespace jank::runtime::obj
     trans.insert_unique(via_kw, make_box<obj::persistent_vector>(via_trans.persistent()));
 
     runtime::detail::native_transient_vector trace_trans;
+#ifndef __EMSCRIPTEN__
     if(resolved_trace)
     {
       for(auto const &frame : resolved_trace->frames)
@@ -143,6 +157,7 @@ namespace jank::runtime::obj
         trace_trans.push_back(frame_to_vec(frame));
       }
     }
+#endif
     trans.insert_unique(trace_kw, make_box<obj::persistent_vector>(trace_trans.persistent()));
 
     return make_box<obj::persistent_array_map>(trans);

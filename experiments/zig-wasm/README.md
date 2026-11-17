@@ -8,7 +8,7 @@ Read the complete handoff prompt at [`../../ZIG_WASM_PROMPT.md`](../../ZIG_WASM_
 
 The branch starts at PR #1107 head `43ffa8d0a6bce1c17c552c6d46f4d6486dc304ed`. The PR separates a host compiler from a target static runtime and begins moving compiler configuration into JSON. The upstream PR remains authoritative for its current status.
 
-The original baseline uses an installed jank compiler for host code generation and a prebuilt native runtime. The separate Linux host-build reproduction below builds this fork's compiler and native static runtime; it does not build a Wasm runtime.
+The original baseline uses an installed jank compiler for host code generation and a prebuilt native runtime. The separate Linux host-build reproduction below builds this fork's compiler and native static runtime. The later wasm64 runtime-archive attempt builds a target archive and links the spike, but startup fails before its checks execute.
 
 ## Results
 
@@ -25,10 +25,12 @@ The original baseline uses an installed jank compiler for host code generation a
 | Newer Boehm collects on wasm64 with an explicit registered root. | Smoke passed through 32 forced collections. |
 | Newer Boehm discovers local roots with Asyncify. | Current smoke passes, but earlier variants lost live objects. Unresolved. |
 | Binaryen pointer spilling works in the collector test. | Failed during linking. The collector suite correctly exits 1. |
+| Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
+| Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Node reaches a jank startup error; neither spike success marker is printed. |
 
 The native Zig C++ build still uses the installed jank package's matching libc++, libunwind and LLVM 23 compiler runtime. It does not rebuild all dependencies with Zig. The generated launcher's extraction also invokes the installed jank compiler before the final Zig compilation.
 
-No full jank Wasm runtime or target core library has been linked or executed. No jank tagged-reference GC test has passed. These distinctions must remain visible in future reports.
+The later wasm64 spike links the target runtime/core libraries and begins execution, but does not complete successfully. No jank tagged-reference GC stress test has passed. A linked application is not evidence of a correct collector or supported general-purpose Wasm runtime.
 
 ## Environment
 
@@ -246,7 +248,11 @@ This demonstrates native host/target separation and native execution only.
 It does not test another architecture, the installed compiler's relocatability,
 a complete Wasm runtime, or general collector/FFI memory safety.
 
-### wasm64 target-runtime blocker probe
+### Initial wasm64 target-runtime blocker probe (historical)
+
+This section records `devin/1794872204-wasm64-target-runtime`, including that
+revision's helper options and failures. The following runtime-archive section
+supersedes its build status and describes the current helper.
 
 This AI-assisted attempt starts from the Linux host-build branch at
 `5e5fa76e48a41485cf1be6b8f93413baad570a33`. It reuses that Ubuntu 24.04
@@ -354,6 +360,142 @@ reached; `libjank-static-runtime.a` does not exist in this build. No application
 or collector was executed. Native regression configure/build remained successful
 (`ninja: no work to do.`), and the native tests still reported 128/128 cases,
 2024/2024 assertions, 868 jank files with 9 skips and 0 failures.
+
+### wasm64 runtime archive and spike link attempt
+
+This AI-assisted follow-up starts from `16e7e1b832e6d47b200cc42294859eaba32a3eea`.
+It preserves native defaults and the bdwgc submodule pin. Changes were committed
+separately: missing includes, collector integration/threading, executable-path
+semantics, stack-trace gating, regression coverage, and future cancellation.
+
+From this experiment directory, with the same Ubuntu 24.04 container and local
+Emscripten 7.0.0, Zig 0.17.1 and Node 26.13.1 tools:
+
+```sh
+# Refresh native binaries/PCH after header changes; the helper exports C.UTF-8.
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh host
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh deps
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh configure
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh build
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh spike
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+```
+
+`build` still uses `-k 0`. `spike` generates the real launcher and module using
+the fork's native compiler, reuses the target core module's compile flags from
+`compile_commands.json` (not the host-link flags in the JSON target config),
+and compiles `native.zig` with `zig build-obj -target wasm64-freestanding
+-O ReleaseSafe`. It then links with:
+
+```sh
+em++ -sMEMORY64=1 -fwasm-exceptions -O2 \
+  artifacts/wasm64-spike/main.o artifacts/wasm64-spike/core.o \
+  artifacts/wasm64-spike/zig.o artifacts/build-wasm64/libjank-static-runtime.a \
+  -Wl,--error-limit=0 -o artifacts/wasm64-spike/spike.js
+.tools/node-v26.13.1-linux-x64/bin/node artifacts/wasm64-spike/spike.js
+```
+
+No unresolved-symbol suppression, fake symbols, platform macro injection, or
+handwritten implementation of the Zig calls is used. The output is an Emscripten
+JS launcher plus Wasm module, not a freestanding/import-free module. Outputs and
+logs stay under ignored `artifacts/wasm64-spike` and `artifacts/logs/wasm64-*`.
+
+**Source changes:** `runtime/core.hpp` includes the actual delay definition and
+`target_config.cpp` includes `util/fmt.hpp`. The collector had no existing patch
+mechanism: `bdwgc.cmake` previously built the pinned submodule directly. On
+Emscripten only, it now copies that source into `build-wasm64/bdwgc-source` at
+configure time and applies `cmake/dependency/bdwgc-wasm64.patch` there, with Git
+repository discovery bounded so ignored build paths are not silently skipped.
+Native builds still use the untouched submodule directly. The patch reproduces
+Ali Kamarainen's upstream `3f4e077edb2496bfd14e625f3a440f38caac458a`: one header,
+6 additions/5 deletions, conditional `CPP_WORDSZ=64` for `__wasm64__` (32 otherwise),
+plus its architecture-list comment. It changes neither root discovery nor the
+collector algorithm, and the pin stays at `327ef1f8c80a611b2f8b915850c8b2fd38e6595e`.
+
+`GC_THREADS` is now conditional on the collector's `enable_threads` option.
+Non-thread builds skip GC thread registration and explicitly throw
+`Futures require a thread-enabled runtime` for future creation/cancellation/
+cancellation queries. They do not report fake future completion. Native threaded
+implementations remain unchanged. The first real spike link exposed
+`undefined symbol: pthread_tryjoin_np`; guarding cancellation queries removed
+that Unix threading extension from the non-thread target.
+
+Emscripten does not configure/build cpptrace or libdwarf. Trace collection,
+resolution and stored trace fields are gated out; exception maps have an empty
+trace, and exception/panic printers say `Stack traces are unsupported on
+Emscripten.` Ordinary typed exception handling remains. Native calls still use
+cpptrace's implementation via an alias. Target zstd 1.5.7 remains necessary for
+compressed runtime resources, so it is fetched independently with a verified
+SHA-256 and threading disabled, rather than being obtained through cpptrace.
+
+`process_path()` throws `Executable paths are unavailable on Emscripten`.
+Consequently `process_dir()` also fails clearly: compiler/resource-discovery
+callers cannot infer a native executable directory in the Wasm virtual
+filesystem. No fake path or current-directory fallback is returned.
+
+**Configure/compile/archive:** configure returned 0 in 5 s; the final incremental
+keep-going build returned 0 in 40 s. All 16 target core modules and the runtime
+and dependency objects compiled, and the PR #1107 merger produced the
+23,890,548-byte `libjank-static-runtime.a`. This is archive creation, not an
+executable link. Final failures grouped against the initial table:
+
+| File/dependency | Failed object edges now | Outcome/category |
+| --- | ---: | --- |
+| `runtime/core.hpp` / `aot/target_config.cpp` | 0 | Direct include fixes remove the 11 non-PCH errors |
+| Pinned bdwgc | 0 | Credited word-size patch applied to private build copy; non-thread compilation |
+| Cpptrace/libdwarf | 0 | Not built on Emscripten; stack traces explicitly unsupported |
+| `util/environment.cpp`, `process_path()` | 0 | Explicit unsupported-executable-path exception |
+| Folly/Immer/terminal/zip/zstd/static runtime/core modules | 0 | Compiled; not general runtime-correctness claims |
+
+The current 349-command database has **0** `GC_THREADS`, **0** `-pthread`, **0**
+cpptrace source commands, and **0** libdwarf source commands. Host discovery is
+not solved globally: LLVM/Clang 23 metadata, the incorrect recorded wasm32
+triple, and LLVM include/library paths remain. Another **72 unbuilt compiler/
+CppInterOp commands** still contain explicit `/usr/include`; none of their
+objects existed in the target build. The selected static-runtime archive build
+did not hit those commands. The application link uses only the target SDK
+library directories, not host LLVM/zstd archives.
+
+**Link/run:** the final link returned 0 in 3 s and produced a 3,275,690-byte Wasm
+module. There are **zero remaining missing-symbol diagnostics**. Node returned
+0 but printed:
+
+```text
+The `reader_opts` argument must be a map, not a `persistent_list`.
+Stack traces are unsupported on Emscripten.
+```
+
+Neither scalar nor borrowed-buffer success marker appeared. `spike` therefore
+returns **1**, not success: `jank_init_static` currently returns 0 after caught
+exceptions, so process status alone is insufficient. The diagnostic originates
+in the map check in `context::read_string` (`runtime/context.cpp`); the reason
+the wrong object type reaches it is **unverified**. No collector, object-layout,
+or code-generation cause is claimed from this symptom alone.
+
+| Phase | Remaining blocker | Count/category |
+| --- | --- | --- |
+| Archive compilation/merging | None observed | 0 failed edges |
+| Initial spike link | `pthread_tryjoin_np` | 1 missing native-thread-extension symbol; resolved |
+| Final spike link | None observed | 0 missing symbols |
+| Spike execution | Reader options observed as a list instead of a map | 1 observed startup error; root cause unresolved |
+
+Before linking the spike, the helper also links/runs `wasm-probe/runtime-smoke.cpp`
+against the archive. Normal/empty callbacks and standard, jank-object, jank-error
+and unknown exceptions dispatch correctly; process-path and all three guarded
+future APIs throw their explicit errors. Node output:
+
+```text
+runtime smoke exception
+Stack traces are unsupported on Emscripten.
+wasm64 runtime: exception dispatch and unsupported capabilities passed
+```
+
+The final native build returned 0 (78 s incremental), and `jank-test` returned
+0 (13 s): **129/129** cases, **2029/2029** assertions, **868** jank files,
+**9** skips and **0** failures. The added dispatch regression supplies five
+assertions. These results do not validate general filesystem/TTY behavior,
+Wasm GC root visibility, tagged-reference GC safety, or successful spike
+execution. The earlier collector-suite limitations remain unresolved.
 
 ## Files
 

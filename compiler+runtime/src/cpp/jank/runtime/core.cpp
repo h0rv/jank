@@ -5,7 +5,9 @@
 #include <cxxabi.h>
 #include <charconv>
 
-#include <cpptrace/basic.hpp>
+#ifndef __EMSCRIPTEN__
+  #include <cpptrace/basic.hpp>
+#endif
 
 #include <jank/gc.hpp>
 #include <jank/runtime/core.hpp>
@@ -1090,6 +1092,10 @@ namespace jank::runtime
 
   obj::future_ref future(object_ref const fn)
   {
+#ifndef GC_THREADS
+    static_cast<void>(fn);
+    throw std::runtime_error{ "Futures require a thread-enabled runtime" };
+#else
     auto const bindings{ __rt_ctx->get_thread_bindings() };
     auto const ret{ make_box<obj::future>() };
     /* The future hangs onto its function to keep it alive. */
@@ -1169,10 +1175,15 @@ namespace jank::runtime
       }
     } };
     return ret;
+#endif
   }
 
   void cancel_future(obj::future_ref const future)
   {
+#ifndef GC_THREADS
+    static_cast<void>(future);
+    throw std::runtime_error{ "Futures require a thread-enabled runtime" };
+#else
     /* We need to hold this lock the whole time we're checking, to ensure the thread
      * doesn't finish while we're here checking. */
     auto const locked_state{ future->state.rlock() };
@@ -1182,10 +1193,15 @@ namespace jank::runtime
       auto const thread_handle{ locked_thread->native_handle() };
       pthread_cancel(reinterpret_cast<pthread_t>(thread_handle));
     }
+#endif
   }
 
   bool is_future_cancelled(obj::future_ref const future)
   {
+#ifndef GC_THREADS
+    static_cast<void>(future);
+    throw std::runtime_error{ "Futures require a thread-enabled runtime" };
+#else
     /* We need to hold this lock the whole time we're checking, to ensure the thread
      * doesn't finish while we're here checking. */
     /* NOLINTNEXTLINE(misc-const-correctness): Upgrading requires non-const. */
@@ -1247,6 +1263,7 @@ namespace jank::runtime
       write_locked_state->status = obj::future_status::done;
       return false;
     }
+#endif
 #endif
   }
 
@@ -1327,7 +1344,9 @@ namespace jank::runtime
   ex_info(jtl::immutable_string const &message, object_ref const data, object_ref const cause)
   {
     auto const ret{ make_box<obj::exception_info>(message, data) };
+#ifndef __EMSCRIPTEN__
     ret->raw_trace = std::make_unique<cpptrace::raw_trace>(cpptrace::generate_raw_trace());
+#endif
     if(cause.is_some())
     {
       ret->cause = try_object<obj::exception_info>(cause);

@@ -110,7 +110,7 @@ set(
   -std=gnu++20
   -DJANK_VERSION="${jank_version}"
   -DJANK_CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
-  -DGC_THREADS -DPOINTER_MASK=0x0000FFFFFFFFFFFF
+  -DPOINTER_MASK=0x0000FFFFFFFFFFFF
   -DIMMER_HAS_LIBGC=1 -DIMMER_TAGGED_NODE=0 -DHAVE_CXX14=1
   -DCPPINTEROP_USE_REPL
   -DFOLLY_HAVE_JEMALLOC=0 -DFOLLY_HAVE_TCMALLOC=0 -DFOLLY_ASSUME_NO_JEMALLOC=1 -DFOLLY_ASSUME_NO_TCMALLOC=1
@@ -121,6 +121,10 @@ set(
 if(jank_emulated_tls)
   # https://groups.google.com/g/llvm-dev/c/W-OweiAjDcU?pli=1
   list(APPEND jank_common_compiler_flags -femulated-tls)
+endif()
+
+if(NOT DEFINED enable_threads OR enable_threads)
+  list(APPEND jank_common_compiler_flags -DGC_THREADS)
 endif()
 
 if (WIN32)
@@ -455,13 +459,16 @@ set(jank_standalone_static_lib_deps
   jank_common_lib
   jank_lib_phase_2
   jank_static_lib
-  cpptrace::cpptrace
   Boost::multiprecision
   nanobench_lib
   jankzip_lib
   bdwgc::gc bdwgc::gctba
   folly_lib
 )
+
+if(NOT EMSCRIPTEN)
+  list(APPEND jank_standalone_static_lib_deps cpptrace::cpptrace)
+endif()
 set(jank_standalone_dynamic_lib_deps
   ${jank_standalone_static_lib_deps}
   jank_compiler_lib
@@ -524,7 +531,18 @@ set(BUILD_SHARED_LIBS OFF)
 
 include(FetchContent)
 include(cmake/dependency/bdwgc.cmake)
-include(cmake/dependency/cpptrace.cmake)
+if(NOT EMSCRIPTEN)
+  include(cmake/dependency/cpptrace.cmake)
+else()
+  set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "Build zstd programs")
+  set(ZSTD_BUILD_SHARED OFF CACHE BOOL "Build shared zstd")
+  set(ZSTD_MULTITHREAD_SUPPORT OFF CACHE BOOL "Build threaded zstd")
+  FetchContent_Declare(zstd
+    URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+    URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+    SOURCE_SUBDIR build/cmake)
+  FetchContent_MakeAvailable(zstd)
+endif()
 include(cmake/dependency/cppinterop.cmake)
 include(cmake/dependency/boost-multiprecision.cmake)
 include(cmake/dependency/folly.cmake)
@@ -704,12 +722,15 @@ target_include_directories(
 
 target_link_libraries(
   jank_common_lib PRIVATE
-  cpptrace::cpptrace
   Boost::multiprecision
   Boost::boost
   nanobench_lib
   bdwgc::gc bdwgc::gctba
 )
+
+if(NOT EMSCRIPTEN)
+  target_link_libraries(jank_common_lib PRIVATE cpptrace::cpptrace)
+endif()
 
 if(NOT WIN32)
   target_link_libraries(jank_common_lib PUBLIC libzstd_static)
@@ -1013,6 +1034,7 @@ if(jank_test)
     test/cpp/jank/util/fmt.cpp
     test/cpp/jank/util/path.cpp
     test/cpp/jank/util/sha256.cpp
+    test/cpp/jank/util/try.cpp
     test/cpp/jank/read/lex.cpp
     test/cpp/jank/read/parse.cpp
     test/cpp/jank/runtime/behavior/call.cpp

@@ -17,8 +17,8 @@
   <p>A raylib game compiled from the same jank source for native and wasm64.</p>
   <p>Click New game, then hold Space to rise; release to fall. P pauses, Enter returns to the menu.</p>
   <iframe class="game-frame" src="flappy-bird.html" title="Live Flappy Bird game" loading="eager"></iframe>
-  <noscript><p>The game needs JavaScript and a browser with memory64.</p></noscript>
-  <p class="note">Needs memory64, Wasm exceptions, JSPI and WebGL2. Tested in Chrome 156.</p>
+  <noscript><p>Requires JavaScript, memory64, Wasm exceptions, JSPI and WebGL2.</p></noscript>
+  <p class="note">Requires memory64, Wasm exceptions, JSPI and WebGL2. Runs in current Chrome (tested with Chrome 156).</p>
   <p><a href="https://github.com/jank-lang/jank/tree/a013d8dfe6b6ab18618ac20d73a5e99f50af2433/example/gui/flappy-bird">jank's official flappy-bird example</a>, with unchanged source (<a href="flappy-bird-LICENSE">MPL-2.0</a>). <a href="flappy-bird.jank">Source</a> · <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/zig-wasm/examples/flappy-bird">Build notes</a>.</p>
   <figure class="block">
     <figcaption>src/org/jank_lang/example/flappy_bird.jank</figcaption>
@@ -59,8 +59,8 @@
     <details><summary>Runtime log</summary><pre id="stdout"></pre></details>
   </figure>
   <p class="note" id="stats">The module has not started yet.</p>
-  <noscript><p>The example needs JavaScript and a browser with memory64.</p></noscript>
-  <p class="note">The module was compiled ahead of time from jank with Emscripten; there is no REPL or eval. It needs memory64 and Wasm exceptions: Chrome 156 runs it, Safari probably will not. To build it yourself, see the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md#one-command-native--wasm">build notes</a>.</p>
+  <noscript><p>Requires JavaScript, memory64 and Wasm exceptions.</p></noscript>
+  <p class="note">Requires memory64 and Wasm exceptions. Runs in current Chrome (tested with Chrome 156). Compiled ahead of time; no REPL or eval. See the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md#one-command-native--wasm">build notes</a>.</p>
 
   <h2>Status</h2>
   <table>

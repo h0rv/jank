@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 from dataclasses import dataclass
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
@@ -34,7 +35,7 @@ class Project:
     name: str
     main: str
     jank: pathlib.Path
-    zig: pathlib.Path
+    zig: pathlib.Path | None
     expectations: dict[str, tuple[str, ...]]
     wasm_check: str
 
@@ -49,7 +50,10 @@ class Project:
 def load_project(directory=ROOT):
     root = pathlib.Path(directory).resolve()
     try:
-        data = json.loads((root / 'jank-zig.json').read_text())
+        config = root / 'jank-build.json'
+        if not config.exists():
+            config = root / 'jank-zig.json'
+        data = json.loads(config.read_text())
     except (OSError, ValueError) as error:
         raise RuntimeError(f'Cannot read project config in {root}: {error}') from error
     if not isinstance(data, dict):
@@ -71,7 +75,7 @@ def load_project(directory=ROOT):
         return path
 
     jank = source('jank', 'src', True)
-    zig = source('zig', 'native.zig', False)
+    zig = source('zig', 'native.zig', False) if 'zig' in data else None
     raw_expect = data.get('expect')
     if isinstance(raw_expect, list):
         raw_expect = {target: raw_expect for target in ('native', 'node', 'browser')}
@@ -126,7 +130,7 @@ def container():
             command(['docker', 'start', CONTAINER])
 
 
-def prerequisites():
+def prerequisites(project):
     (ROOT / 'artifacts/tmp').mkdir(parents=True, exist_ok=True)
     TOOLS.mkdir(exist_ok=True)
     container()
@@ -137,13 +141,14 @@ def prerequisites():
         logged('container', docker('bash', ROOT / 'scripts/setup-app-container.sh', root=True))
     logged('submodules', ['git', '-C', REPO, 'submodule', 'update', '--init', '--recursive'])
     for tool, url, archive in [
-        (ZIG, 'https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz', 'zig.tar.xz'),
+        *([(ZIG, 'https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz', 'zig.tar.xz')]
+          if project.zig is not None else []),
         (NODE, 'https://nodejs.org/dist/v26.13.1/node-v26.13.1-linux-x64.tar.xz', 'node.tar.xz'),
     ]:
         if not tool.is_file():
             logged(archive, ['curl', '-fL', '--retry', '2', url, '-o', TOOLS / archive])
             command(['tar', '-xJf', TOOLS / archive, '-C', TOOLS])
-    if subprocess.check_output([ZIG, 'version'], text=True).strip() != '0.17.1':
+    if project.zig is not None and subprocess.check_output([ZIG, 'version'], text=True).strip() != '0.17.1':
         raise RuntimeError('Zig must be exactly 0.17.1')
     sdk = TOOLS / 'gc-wasm/emsdk'
     if not (sdk / 'upstream/emscripten/em++').is_file() or not (sdk / '.emscripten').is_file():
@@ -173,9 +178,17 @@ def prerequisites():
                    'https://codeload.github.com/WebAssembly/binaryen/tar.gz/a9141c8cc', '-o', archive])
         if hashlib.sha256(archive.read_bytes()).hexdigest() != 'e67fe7ca3eaf0ff562ff1fb0a4aa682857de16cc61ede27ff8ca4792cf2084ad':
             raise RuntimeError('Binaryen archive checksum mismatch')
+        env = {**os.environ, 'GIT_CEILING_DIRECTORIES': str(TOOLS)}
+        if source.is_dir():
+            checks = [subprocess.run(['git', '-C', str(source), 'apply', *flags,
+                                     '--check', str(patch)], env=env, capture_output=True)
+                      for flags in (['--reverse'], [])]
+            if all(check.returncode for check in checks):
+                backup = source.with_name(f'{source.name}-previous-{time.time_ns()}')
+                print(f'Preserving obsolete private Binaryen source at {backup}', flush=True)
+                source.rename(backup)
         if not source.is_dir():
             command(['tar', '-xzf', archive, '-C', TOOLS])
-        env = {**os.environ, 'GIT_CEILING_DIRECTORIES': str(TOOLS)}
         reverse = subprocess.run(['git', '-C', str(source), 'apply', '--reverse', '--check', str(patch)],
                                  env=env, capture_output=True)
         if reverse.returncode:
@@ -189,7 +202,7 @@ def prerequisites():
 
 def build(app):
     project = load_project(app)
-    prerequisites()
+    prerequisites(project)
     if project.root.is_relative_to(OUT):
         raise RuntimeError('Project sources must be outside artifacts/app')
     for platform in ('native', 'wasm'):
@@ -198,7 +211,7 @@ def build(app):
             shutil.rmtree(stage)
         shutil.copytree(project.root, stage, ignore=shutil.ignore_patterns(
             'artifacts', '.tools', '.git', 'target', 'zig-out', '.zig-cache', '__pycache__'))
-        if not (stage / 'build.zig').is_file():
+        if project.zig is not None and not (stage / 'build.zig').is_file():
             template = (ROOT / 'scripts/project-build.zig').read_text()
             (stage / 'build.zig').write_text(template.replace('__ZIG_ROOT__',
                 json.dumps(str(project.zig.relative_to(project.root)))).replace('__LIBRARY_NAME__',
@@ -210,8 +223,9 @@ def build(app):
                 f'EM_CONFIG={TOOLS / "gc-wasm/emsdk/.emscripten"}',
                 f'ZIG_GLOBAL_CACHE_DIR={ROOT / ".zig-cache/global"}',
                 *args, workdir=cwd), **kwargs)
-        run('zig', [ZIG, 'build', '--build-file', stage / 'build.zig', '-Doptimize=ReleaseSafe',
-                    '--prefix', prefix, '--cache-dir', stage / '.zig-cache'])
+        if project.zig is not None:
+            run('zig', [ZIG, 'build', '--build-file', stage / 'build.zig', '-Doptimize=ReleaseSafe',
+                        '--prefix', prefix, '--cache-dir', stage / '.zig-cache'])
         modules, launcher = generate_sources(project, stage, platform, prefix, run)
         if platform == 'native':
             build_native(project, stage, prefix, modules, launcher, run)
@@ -226,7 +240,9 @@ def generate_sources(project, stage, platform, prefix, run):
              f'JANK_RUNTIME_DIR={ROOT / "artifacts/host-resources"}',
              host, '--reader-feature', platform,
              '--module-path', stage / project.jank.relative_to(project.root),
-             '--target-dir', stage / 'target', '-L', prefix / 'lib', f'-l:{project.name}']
+             '--target-dir', stage / 'target']
+    if project.zig is not None:
+        flags.extend(['-L', prefix / 'lib', f'-l:{project.name}'])
     run('modules', [*flags, '--output-target', 'cpp', 'compile-module', project.main], cwd=stage)
     # compile-module emits the transitive source dependencies while loading the entry.
     # This cache belongs to a freshly created stage, never another build or platform.
@@ -255,7 +271,8 @@ def build_native(project, stage, prefix, modules, launcher, run):
     triple = container_output('g++-14', '-dumpmachine')
     cpp = ['-nostdinc++', '-I', include / 'c++/14', '-I', include / triple / 'c++/14',
            '-I', include / 'c++/14/backward']
-    flags = [ZIG, 'c++', '-std=c++20', '-O2', '-fPIC', '-fwrapv', '-femulated-tls', *cpp,
+    compiler = [ZIG, 'c++'] if project.zig is not None else ['/usr/lib/llvm-23/bin/clang++']
+    flags = [*compiler, '-std=c++20', '-O2', '-fPIC', '-fwrapv', '-femulated-tls', *cpp,
              '-DGC_THREADS', '-DPOINTER_MASK=0x0000FFFFFFFFFFFF', '-DIMMER_HAS_LIBGC=1',
              '-DIMMER_TAGGED_NODE=0', '-DBOOST_MP_STANDALONE=1', '-DFOLLY_HAVE_JEMALLOC=0',
              '-DFOLLY_HAVE_TCMALLOC=0', '-DFOLLY_ASSUME_NO_JEMALLOC=1',
@@ -270,8 +287,8 @@ def build_native(project, stage, prefix, modules, launcher, run):
     output = project.out / 'native' / project.name
     output.parent.mkdir(parents=True, exist_ok=True)
     gcc = pathlib.Path(container_output('g++-14', '-print-libgcc-file-name')).parent
-    run('link', [*flags, '-nostdlib++', launcher, *objects,
-                prefix / 'lib' / f'lib{project.name}.a',
+    libraries = [prefix / 'lib' / f'lib{project.name}.a'] if project.zig is not None else []
+    run('link', [*flags, '-nostdlib++', launcher, *objects, *libraries,
                 ROOT / 'artifacts/build-target/libjank-static-runtime.a',
                 f'-L{gcc}', stdlib, container_output('g++-14', '-print-file-name=libgcc_s.so'),
                 '-o', output])
@@ -301,16 +318,19 @@ def build_wasm(project, stage, modules, launcher, run):
         obj = stage / f'module-{index}.o'
         run(f'cpp-{index}', [*flags, '-O2', '-g', *extra, '-c', source, '-o', obj], cwd=cwd)
         objects.append(obj)
-    zig = stage / 'kernel.o'
-    run('kernel', [ZIG, 'build-obj', stage / project.zig.relative_to(project.root),
-                  '-target', 'wasm64-freestanding', '-O', 'ReleaseSafe', f'-femit-bin={zig}',
-                  '--cache-dir', stage / '.zig-cache'])
+    if project.zig is not None:
+        zig = stage / 'kernel.o'
+        run('kernel', [ZIG, 'build-obj', stage / project.zig.relative_to(project.root),
+                      '-target', 'wasm64-freestanding', '-O', 'ReleaseSafe', f'-femit-bin={zig}',
+                      '--cache-dir', stage / '.zig-cache'])
+        objects.append(zig)
     output = project.out / 'wasm'
     output.mkdir(parents=True, exist_ok=True)
     js = output / f'{project.name}.js'
     run('link', [flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1',
                 '-fwasm-exceptions', '-sALLOW_MEMORY_GROWTH=1', '-sEXIT_RUNTIME=1',
-                *objects, zig, target / 'libjank-static-runtime.a', '-Wl,--error-limit=0', '-o', js])
+                '-sSTACK_SIZE=4194304',
+                *objects, target / 'libjank-static-runtime.a', '-Wl,--error-limit=0', '-o', js])
     run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm')])
     arguments = ['continuous', '20'] if project.wasm_check == 'spike-continuous' else ['static-roots']
     js.write_text("var Module = typeof Module !== 'undefined' ? Module : {};\n"
@@ -431,7 +451,7 @@ def main():
     if args.action == 'check':
         build(args.app_dir)
     if not (project.out / 'wasm/index.html').is_file() or not (project.out / 'native' / project.name).is_file():
-        raise RuntimeError('Missing app outputs; run ./jank-zig build first')
+        raise RuntimeError('Missing app outputs; run ./jank-build build first')
     if args.action == 'serve':
         with server(args.port, project=project) as url:
             print(f'Serving {url} (Ctrl-C to stop)', flush=True)
@@ -462,7 +482,7 @@ if __name__ == '__main__':
     try:
         sys.exit(main())
     except (OSError, subprocess.SubprocessError, RuntimeError) as error:
-        print(f'jank-zig: {error}', file=sys.stderr)
+        print(f'jank-build: {error}', file=sys.stderr)
         sys.exit(1)
     except KeyboardInterrupt:
         sys.exit(130)

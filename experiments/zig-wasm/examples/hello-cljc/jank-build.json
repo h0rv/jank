@@ -1,7 +1,6 @@
 {
   "name": "hello",
   "main": "hello.core",
-  "zig": "zig/main.zig",
   "expect": {
     "native": ["platform: native", "weighted buffer: 30", "hello: checks passed"],
     "node": ["platform: node", "weighted buffer: 30", "hello: checks passed"],

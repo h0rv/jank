@@ -1,0 +1,5 @@
+;; AI-assisted example: shared application logic, with no native library.
+(ns hello.math)
+
+(defn weighted [values]
+  (reduce + 0 (map-indexed (fn [index value] (* (inc index) value)) values)))

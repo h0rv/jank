@@ -1,10 +1,12 @@
 ;; AI-assisted example: the same entry namespace and logic on both targets.
 (ns hello.core
-  (:require [hello.buffer :as buffer]
+  (:require [hello.math :as math]
             [hello.platform :as platform]))
 
 (defn -main [& _]
   (platform/announce)
-  (let [answer (buffer/weighted)]
+  (assert (= 0 (math/weighted [])))
+  (let [answer (math/weighted [1 2 3 4])]
+    (assert (= 30 answer))
     (platform/emit (str "weighted buffer: " answer)))
   (platform/emit "hello: checks passed"))

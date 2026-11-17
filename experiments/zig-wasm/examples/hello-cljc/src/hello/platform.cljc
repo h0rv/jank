@@ -1,4 +1,4 @@
-;; AI-assisted thin platform layer; all computation lives in shared jank/Zig.
+;; AI-assisted thin platform layer; all computation lives in shared jank.
 (ns hello.platform)
 
 #?(:wasm

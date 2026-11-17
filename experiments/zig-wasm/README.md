@@ -2429,8 +2429,10 @@ boxed object exceptions from unchanged native integer exceptions.
 
 The 20-entry startup check still requires both spike markers on every entry,
 with GC enabled. It is not a general Wasm-support or arbitrary native
-exception-rooting claim. The 4 MiB diagnostic stack remains confined to
-`startup-spill`; normal build/browser configuration is unchanged.
+exception-rooting claim. Within `build-wasm64-target.sh`, the 4 MiB diagnostic
+stack remains confined to `startup-spill`. Main's separate `jank-build` wrapper
+also selects a 4 MiB stack for its spilled Wasm applications; that build/browser
+configuration is retained unchanged by this merge.
 
 Final run output:
 

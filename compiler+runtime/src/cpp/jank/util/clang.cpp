@@ -151,9 +151,15 @@ namespace jank::util
     return resource_dir;
   }
 
-  jtl::result<void, error_ref> invoke_clang(std::vector<char const *> args)
+  jtl::result<void, error_ref>
+  invoke_clang(std::vector<char const *> args, std::filesystem::path const &compiler)
   {
-    auto const clang_path_res{ find_clang() };
+    if(!compiler.empty() && !std::filesystem::exists(compiler))
+    {
+      return err(error::system_failure(format("Target compiler does not exist: {}", compiler.string())));
+    }
+    auto const clang_path_res{ compiler.empty() ? find_clang()
+                                              : jtl::option<jtl::immutable_string>{ compiler.string() } };
     if(clang_path_res.is_none())
     {
       return err(error::system_clang_executable_not_found());

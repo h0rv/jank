@@ -13,19 +13,19 @@
   <h1>jank-wasm</h1>
   <p>A research fork of <a href="https://github.com/jank-lang/jank">jank</a> that compiles Clojure ahead of time to WebAssembly.</p>
 
-  <h2>Pac-Man</h2>
+  <h2>Flappy Bird</h2>
   <p>A raylib game compiled from the same jank source for native and wasm64.</p>
-  <p>Click, then arrow keys. Enter restarts after game over.</p>
-  <iframe class="game-frame" src="pacman.html" title="Live Pac-Man game" loading="eager"></iframe>
+  <p>Click or press Space to start. Hold either to rise; release to fall. P pauses, Enter returns to the menu.</p>
+  <iframe class="game-frame" src="flappy-bird.html" title="Live Flappy Bird game" loading="eager"></iframe>
   <noscript><p>The game needs JavaScript and a browser with memory64.</p></noscript>
   <p class="note">Needs memory64, Wasm exceptions and WebGL2. Tested in Chrome 156.</p>
-  <p>Adapted from <a href="https://github.com/b12n-oss/raylib-pacman">b12n-oss/raylib-pacman</a> (<a href="pacman-LICENSE">EPL-2.0</a>), after Michiel Borkent's original game. <a href="pacman-NOTICE.md">Notices</a> · <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/zig-wasm/examples/pacman">Example source</a>.</p>
+  <p>Adapted from <a href="https://github.com/jank-lang/jank/tree/main/example/gui/flappy-bird">jank's official flappy-bird example</a> (<a href="flappy-bird-LICENSE">MPL-2.0</a>). <a href="flappy-bird.jank">Modified source</a> · <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/zig-wasm/examples/flappy-bird">Build notes</a>.</p>
   <figure class="block">
-    <figcaption>src/raylib_pacman/pacman.jank</figcaption>
+    <figcaption>src/org/jank_lang/example/flappy_bird.jank</figcaption>
     <pre data-lang="clojure">(defn frame []
-  (let [s (swap! state step)]
+  (let [state (step-frame @global-state)]
     (cpp/BeginDrawing)
-    (draw-state! s)
+    (reset! global-state (draw-frame! state))
     (cpp/EndDrawing))
   nil)</pre>
   </figure>

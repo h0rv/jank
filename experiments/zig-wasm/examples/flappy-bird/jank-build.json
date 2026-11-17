@@ -1,0 +1,7 @@
+{
+  "name": "flappy-bird",
+  "main": "org.jank-lang.example.flappy-bird",
+  "libraries": ["raylib"],
+  "frame": "org.jank-lang.example.flappy-bird/frame",
+  "expect": ["flappy-bird: rules passed", "flappy-bird: initialized"]
+}

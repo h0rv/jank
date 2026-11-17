@@ -1,16 +1,11 @@
 # Flappy Bird
 
-AI-assisted browser/native adaptation of [jank's official flappy-bird
-example](https://github.com/jank-lang/jank/tree/a013d8dfe6b6ab18618ac20d73a5e99f50af2433/example/gui/flappy-bird),
-upstream commit `a013d8dfe6b6ab18618ac20d73a5e99f50af2433`.
-The upstream MPL-2.0 license is retained in LICENSE. Modified source is
-available in this directory under the same license. This is a research-fork
-port, not an upstream-supported browser release.
-
-The game uses raylib and raygui, supplied by jank-build's raylib support
-(their zlib licenses are retained in the raylib build recipe). All graphics
-are procedural; upstream loads no images, fonts, sounds or other asset files,
-so no preload archive or additional asset license is needed.
+An AI-assisted build integration for [jank's official flappy-bird example](https://github.com/jank-lang/jank/tree/a013d8dfe6b6ab18618ac20d73a5e99f50af2433/example/gui/flappy-bird).
+`vendor/` contains every file from that directory at upstream commit
+`a013d8dfe6b6ab18618ac20d73a5e99f50af2433`, byte-identical, including its
+MPL-2.0 LICENSE and project.clj. No example source is modified. `upstream.sha256`
+records the vendored file digests; verify from this directory with
+`sha256sum -c upstream.sha256`. Builds need no network fetch of the example.
 
 From the experiment directory:
 
@@ -20,22 +15,30 @@ bash examples/flappy-bird/check-native.sh
 ./jank-build serve examples/flappy-bird
 ```
 
-Click the canvas or press Space to start. Hold Space or the left mouse button
-to rise; release to fall. P pauses; Enter returns to the menu after game over.
-The menu bird bobs automatically before input. Focus the canvas for keyboard
-controls. Browser builds need memory64, Wasm exceptions and WebGL2.
+Click New game, then hold Space to rise and release to fall. P pauses; Enter
+returns to the menu after game over. The upstream main menu is static. Focus
+the canvas for keyboard controls.
 
-## Changes from upstream
+## Browser integration
 
-- Extract one iteration into `frame`, keep state in an atom and leave native
-  looping, pacing and window cleanup behind `:native`. Browser RAF owns pacing.
-- Allow Space or a canvas click to start, and held left mouse as an alternative
-  to held Space. Keep upstream physics, collisions, scoring, colors and drawing.
-- Draw a bobbing bird on the otherwise static main menu, reusing its drawing.
-- Add startup assertions/markers and a bounded two-second native smoke mode
-  when an argument is supplied. No assets or handwritten gameplay JS added.
+The example's original blocking loop and SetTargetFPS remain intact. Raylib
+6.0's web WindowShouldClose already calls emscripten_sleep(12); jank-build uses
+Emscripten JSPI to suspend and resume that call without blocking the browser.
+There are no reader conditionals or browser-specific changes in the source.
+The build-system adapter registers static GC roots and wraps EndDrawing only
+to report rendered-frame statistics to the page. Normal GC remains enabled;
+the existing spill transform protects live references. This route requires
+memory64, Wasm exceptions, JSPI and WebGL2 (Chrome 156 tested). It is not a
+claim that every jank application or browser is supported.
 
-The native smoke checks initialization and two seconds of the render loop.
-The site browser check covers idle animation, starting, held/released input,
-focus, scrolling and runtime errors. Full playthroughs, long-duration memory
-behavior and non-Chrome browsers are not established by these bounded checks.
+Raylib and raygui are supplied by jank-build's raylib support; their zlib
+licenses are retained by the build recipe. Upstream loads no external images,
+fonts, sounds or other asset files; all drawing uses library primitives.
+No preload archive or separate asset attribution is needed.
+
+The bounded native smoke checks window/font/shader initialization and that
+the process stays alive until the test timeout. Browser checks cover menu,
+starting, held/released Space, scrolling, runtime errors and frame cadence.
+Full playthroughs, long-duration memory behavior and non-Chrome browsers
+remain unverified. This is a fork-only browser integration, not an upstream
+supported browser release.

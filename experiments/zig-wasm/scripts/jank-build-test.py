@@ -166,7 +166,10 @@ class ProjectTests(unittest.TestCase):
                 self.assertIn('-sUSE_GLFW=3', link)
                 self.assertIn('-sASSERTIONS=1', link)
                 cpp = [args for label, args in calls if label.startswith('cpp')][-1]
-                self.assertTrue(any(str(arg).endswith('frame-driver.cpp' if frame else 'startup-driver.cpp') for arg in cpp))
+                self.assertTrue(any(str(arg).endswith('frame-driver.cpp' if frame else 'raylib-loop-driver.cpp') for arg in cpp))
+                self.assertEqual('-sJSPI=1' in link, not bool(frame))
+                self.assertEqual('-Wl,--wrap=EndDrawing' in link, not bool(frame))
+                self.assertIn('"interactive": true', page)
                 self.assertIn('"frame": ' + ('"hello.core/frame"' if frame else 'null'), page)
 
     def test_per_target_expect(self):

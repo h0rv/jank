@@ -27,10 +27,11 @@ The original baseline uses an installed jank compiler for host code generation a
 | Binaryen pointer spilling works in the collector test. | Failed during linking. The collector suite correctly exits 1. |
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
 | Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Node reaches a jank startup error; neither spike success marker is printed. |
+| Tagged jank map retention across wasm64 collections. | An explicitly registered static root passes; the default unregistered root is lost. This is a diagnostic control, not a runtime rooting solution. |
 
 The native Zig C++ build still uses the installed jank package's matching libc++, libunwind and LLVM 23 compiler runtime. It does not rebuild all dependencies with Zig. The generated launcher's extraction also invokes the installed jank compiler before the final Zig compilation.
 
-The later wasm64 spike links the target runtime/core libraries and begins execution, but does not complete successfully. No jank tagged-reference GC stress test has passed. A linked application is not evidence of a correct collector or supported general-purpose Wasm runtime.
+The later wasm64 spike links the target runtime/core libraries and begins execution, but does not complete successfully. Startup diagnostics below establish a missing-static-root defect; only an explicitly rooted map retention control passes. A linked application is not evidence of correct general root discovery or a supported general-purpose Wasm runtime.
 
 ## Environment
 
@@ -469,8 +470,9 @@ Neither scalar nor borrowed-buffer success marker appeared. `spike` therefore
 returns **1**, not success: `jank_init_static` currently returns 0 after caught
 exceptions, so process status alone is insufficient. The diagnostic originates
 in the map check in `context::read_string` (`runtime/context.cpp`); the reason
-the wrong object type reaches it is **unverified**. No collector, object-layout,
-or code-generation cause is claimed from this symptom alone.
+the wrong object type reaches it was **unverified at this milestone**. The
+following startup investigation supplies additional evidence; the original
+diagnostic alone did not establish its cause.
 
 | Phase | Remaining blocker | Count/category |
 | --- | --- | --- |
@@ -496,6 +498,164 @@ The final native build returned 0 (78 s incremental), and `jank-test` returned
 assertions. These results do not validate general filesystem/TTY behavior,
 Wasm GC root visibility, tagged-reference GC safety, or successful spike
 execution. The earlier collector-suite limitations remain unresolved.
+
+### wasm64 startup investigation: GC root visibility
+
+This AI-assisted investigation starts from `2ea3f2828e82dbc5cfe01bd51c16fcf8976291e6`.
+**No production runtime fix is claimed or committed here.** The evidence exposes
+a rooting design requirement, not a call-site argument swap. All temporary
+runtime edits were removed. Diagnostic instrumentation is retained as
+`wasm-probe/startup-context.patch`, applied only to an ignored copy compiled into
+a separate diagnostic executable; the normal runtime archive is not modified.
+
+#### Reachable failing path and direct observation
+
+The generated main calls `jank_load_clojure_core()` before loading `spike.core`.
+Generated `clojure.core` initialization reads source metadata through
+`reset_meta(..., _jank_eval_str("{:jank/source ...}"))`. The static implementation
+in `src/cpp/jank/codegen/api_static.cpp` calls `context::forcefully_read_string`,
+which calls the **one-argument** `context::read_string(code)`. That overload
+creates its own cached `persistent_array_map` containing `:eof`/`:eofthrow`, then
+forwards it through the two-argument overload to the three-argument map check.
+Neither generated main nor the generated metadata call passes reader options.
+
+With only a conditional diagnostic at that cached map, the same startup error
+was reproduced together with:
+
+```text
+STARTUP cached defaults: original-type=persistent_array_map current-type=persistent_list original-gc=3 current-gc=4 code={:jank/source {:module "clojure.core", :file "/home/ubuntu/repos/jank/compiler+r
+The `reader_opts` argument must be a map, not a `persistent_list`.
+Stack traces are unsupported on Emscripten.
+```
+
+Thus the target constructs a correctly typed map and later observes a different
+type at the cached pointer after a collection. The exact allocation that reuses
+that memory was not traced. Instrumentation/link layout changes can change the
+symptom: the retained SAFE_HEAP diagnostic reports a `persistent_hash_map`
+instead, followed by a `memcmp`/`module::is_core_module` segmentation fault.
+The temporary exact-list observation remains in
+`artifacts/logs/startup-cached-defaults.log`.
+
+#### Rooting evidence and alternatives checked
+
+The active collector's `gcconfig.h` defines **equal** `DATASTART` and `DATAEND`
+under `WEBASSEMBLY`/`EMSCRIPTEN`, so automatic static-data registration has an
+empty range. The runtime's `jank_init_base()` did not add its static roots.
+This does **not** mean the generated modules register no roots: `cpp_processor.cpp`
+emits `GC_add_roots` for lifted variables and constants, and both calls are
+present in the generated `clojure.core` loader. Those generated ranges do not
+provide rooting for handwritten runtime C++ statics such as the cached reader
+options. The diagnosed gap is in runtime C++ static roots, not the absence of
+all generated root registrations.
+The uninstrumented release link map at `artifacts/wasm64-spike/startup.map`
+places the cached reader-options slot at **0x1bc3b8**, outside the two generated
+core ranges (constants **[0x1b2238, 0x1b55a4)** and variables
+**[0x1b55a8, 0x1b5e98)**). These are observed addresses, not values to hard-code.
+The target compile database also has zero `EMSCRIPTEN_ASYNCIFY`, `ASYNCIFY`, or
+`spill-pointers` occurrences. In `os_dep.c`, the single-threaded extra-root hook
+is zero unless `EMSCRIPTEN_ASYNCIFY` is enabled. The collector's own
+`docs/platforms/README.emscripten` requires cooperation to expose Wasm locals;
+native conservative stack assumptions are insufficient.
+
+`startup-roots.cpp` exercises the real runtime allocator and a volatile static
+slot holding a **tagged jank map reference**, not a raw-pointer replacement.
+After an explicit collection it checks the collector mark bit, then allocates
+32,768 further maps and checks the retained map's payload when marked. It does
+not dereference an unmarked object. The registered control changes only
+`GC_add_roots` for that slot; GC remains enabled in both cases:
+
+| Same diagnostic source | Collections | Marked | Original payload retained | Exit |
+| --- | ---: | ---: | ---: | ---: |
+| Native, default roots | 10 | 1 | 1 | 0 |
+| Native, registered slot | 10 | 1 | 1 | 0 |
+| wasm64, default roots | 25 | 0 | 0 | 1 |
+| wasm64, registered slot | 25 | 1 | 1 | 0 |
+
+Both targets report sizes **88/80/16** for array map/list/object, alignment **8**
+for each, object type offset **8**, and array-map data offset **72**. Both use
+`POINTER_MASK=0x0000FFFFFFFFFFFF`. The registered tagged-reference control works
+with that same mask; it disproves the hypothesis that these current addresses
+or tags are inherently undecodable. It does not validate the entire wasm64
+address space. For the failing reader-options path, construction/layout/type
+selection all happen in target C++, and the initial type is correct. No
+host-computed layout constant is needed by that call. Inspection found no
+`sizeof`/`alignof`/`offsetof` emission in `cpp_processor.cpp`; this is not a
+complete audit of every interop or code-generation path.
+
+The root-retention failure is **proven**, and the cached map changing type
+across collection directly links startup to that defect. A deterministic
+argument-order/arity mismatch cannot explain a target-created cached map first
+being correct and then changing type. As a further countercheck, the same
+diagnostic binary reaches all spike assertions when automatic GC is disabled.
+Disabling collection is **only a diagnostic**, never the proposed fix.
+
+#### Same generated spike, native versus wasm64
+
+`startup-trace` compiles the same generated launcher and `spike.core` C++ for
+both targets, linked to their respective runtime archives and the same Zig
+source. It renames only the launcher entry point to attach diagnostic controls;
+it does not edit assertions or implement Zig functions in C++. The core-library
+archives themselves are the separately generated native/target builds, not
+byte-identical generated core-library code. Target links add `-g`,
+`ASSERTIONS=2`, `SAFE_HEAP=1`, and `ALLOW_MEMORY_GROWTH=1`. All three Wasm controls
+use the **same binary** and memory-growth setting:
+
+| Run | Result | Raw exit |
+| --- | --- | ---: |
+| Native, GC enabled | Both success markers; 15 collections | 0 |
+| wasm64, default GC | Cached map type changes; segmentation fault | 1 |
+| wasm64, GC disabled diagnostically | Both success markers; GC disabled, collection counter 1 | 0 |
+| wasm64, only static data registered (`__global_base` to `__data_end`) | Gets further, but traps with `RuntimeError: function signature mismatch` in `reduce` while loading `spike.core` | 1 |
+
+The globals-only control is a check **against** calling static registration a
+complete fix. It removes the observed cached-defaults failure but still fails
+before spike checks. Missing Wasm-local roots are the leading explanation for
+the remaining GC-sensitive corruption, **not a traced proof of which local is
+lost**; the later function-signature trap has not been independently minimized.
+A supported solution needs a complete globals/stack/Wasm-locals rooting strategy
+and tagged-reference lifetime tests. Selectively pinning `default_reader_opts`,
+disabling collection, or merely growing the heap would not supply that strategy.
+
+The GC-disabled diagnostic prints:
+
+```text
+jank -> Zig: scalar and wide result checks passed
+jank -> Zig: borrowed-buffer checks passed
+startup diagnostic: exit=0 collections=1 gc-disabled=1
+```
+
+The unchanged scalar/buffer assertions run before these markers. A separate
+`startup_assertion.jank` deliberately asserts false. Both native execution and
+the GC-disabled Wasm diagnostic print `:cause "assertion failed"` with message
+`startup diagnostic assertion` yet return **0**. This establishes that the
+assertions are present in AOT but caught language failures do not propagate a
+nonzero exit through `jank_init_static`. Marker/output checks remain necessary.
+
+#### Commands and final status
+
+Run from this experiment directory after the earlier build/spike generation:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh startup-roots
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh startup-trace
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh build
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh spike
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+```
+
+`startup-roots` returns 0 only when the documented retention matrix reproduces,
+including the expected unregistered-Wasm failure. `startup-trace` records every
+control and returns **1** because production-GC success markers remain missing;
+it does not turn the GC-disabled result into a runtime pass. Logs are
+`artifacts/logs/wasm64-startup-*`. The negative assertion module and diagnostic
+controls are never linked into the normal spike.
+
+The final uninstrumented archive build returned 0, spike link returned 0, and
+Node again printed the original `reader_opts`/`persistent_list` error with raw
+exit 0; the spike helper correctly returned **1**. Native `jank-test` returned
+0 in 12 s: **129/129** cases, **2029/2029** assertions, **868** jank files,
+**9** skips and **0** failures. No native/compiler/collector source behavior,
+dependency pin, or normal spike assertion was changed.
 
 ## Files
 

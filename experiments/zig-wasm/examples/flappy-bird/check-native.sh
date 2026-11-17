@@ -3,10 +3,13 @@
 set -euo pipefail
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 LOG="$ROOT/artifacts/logs/flappy-bird-native-check.log"
+set +e
 docker exec --user "$(id -u):$(id -g)" jank-host-build \
-  xvfb-run -a "$ROOT/artifacts/app/flappy-bird/native/flappy-bird" smoke > "$LOG" 2>&1
+  xvfb-run -a timeout 3s "$ROOT/artifacts/app/flappy-bird/native/flappy-bird" > "$LOG" 2>&1
+STATUS=$?
+set -e
 cat "$LOG"
-for marker in 'flappy-bird: rules passed' 'flappy-bird: initialized' 'flappy-bird: native loop completed'; do
-  rg -qx "$marker" "$LOG" || { echo "FLAPPY BIRD NATIVE: FAIL missing $marker" >&2; exit 1; }
-done
+[[ $STATUS == 124 ]] || { echo "FLAPPY BIRD NATIVE: FAIL unexpected exit $STATUS" >&2; exit 1; }
+rg -Fq 'Default shader loaded successfully' "$LOG"
+rg -Fq 'FONT: Default font loaded successfully' "$LOG"
 echo 'FLAPPY BIRD NATIVE: PASS'

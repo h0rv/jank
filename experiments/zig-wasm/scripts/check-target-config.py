@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """AI-assisted configure-only target JSON regressions; no SDK required."""
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -45,6 +46,14 @@ class TargetConfigTests(unittest.TestCase):
         config = self.configure("exit 1", ["-Djank_target_triple=explicit-target"])
         self.assertEqual(config["triple"], "explicit-target")
 
+    def test_wasm32_query_without_memory64_flags(self):
+        config = self.configure(
+            '[ "$#" = 1 ] && [ "$1" = "-print-target-triple" ] || exit 1\n'
+            'echo wasm32-unknown-emscripten',
+            ["-Djank_cross_compile=ON"],
+        )
+        self.assertEqual(config["triple"], "wasm32-unknown-emscripten")
+
     def test_query_failure(self):
         self.configure("echo broken >&2; exit 1", success=False)
 
@@ -73,9 +82,12 @@ set(jank_common_compiler_flags -DJANK_RESOURCE_DIR="/host/resources" -DKEEP=1)
 set(jank_lib_includes -I/host/llvm/include -I /host/clang/include -I/target/include -I/host/llvm-target)
 set(jank_linker_flags -L/host/llvm/lib -L /host/libraries -L/target/lib)
 '''
-        cross = self.configure("echo wasm64-target", ["-Djank_cross_compile=ON"], setup)
-        self.assertEqual(cross["jit_flags"], "-DKEEP=1 -I/target/include -I/host/llvm-target")
-        self.assertEqual(cross["aot_flags"], "-L/target/lib")
+        for bits in (32, 64):
+            with self.subTest(bits=bits):
+                cross = self.configure(f"echo wasm{bits}-unknown-emscripten",
+                                       ["-Djank_cross_compile=ON"], setup)
+                self.assertEqual(cross["jit_flags"], "-DKEEP=1 -I/target/include -I/host/llvm-target")
+                self.assertEqual(cross["aot_flags"], "-L/target/lib")
         native = self.configure("echo native-target", setup=setup)
         self.assertIn("/host/llvm/include", native["jit_flags"])
         self.assertIn("/host/libraries", native["aot_flags"])
@@ -84,13 +96,15 @@ set(jank_linker_flags -L/host/llvm/lib -L /host/libraries -L/target/lib)
 if __name__ == "__main__":
     (ROOT / "artifacts").mkdir(exist_ok=True)
     if len(sys.argv) == 3 and sys.argv[1] == "--generated":
+        bits = os.environ.get("WASM_BITS", "64")
+        assert bits in ("32", "64"), "WASM_BITS must be 32 or 64"
         config = json.loads(pathlib.Path(sys.argv[2]).read_text())
-        assert config["triple"] == "wasm64-unknown-emscripten"
+        assert config["triple"] == f"wasm{bits}-unknown-emscripten"
         for name in ("jit_flags", "aot_flags"):
             assert "NOTFOUND" not in config[name]
             assert "/usr/lib/llvm-" not in config[name]
             assert "artifacts/host-resources" not in config[name]
         print(json.dumps(config, indent=2))
-        print("wasm64 JSON: triple, NOTFOUND, host LLVM and resource checks passed")
+        print(f"wasm{bits} JSON: triple, NOTFOUND, host LLVM and resource checks passed")
     else:
         unittest.main()

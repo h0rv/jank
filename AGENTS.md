@@ -6,6 +6,6 @@ Upstream forbids AI-generated external contributions, including code and prose. 
 
 The branch starts from PR #1107 head `43ffa8d0a6bce1c17c552c6d46f4d6486dc304ed`. Preserve its history and credit. Push work only to the user's fork.
 
-Native jank/Zig checks and small Wasm probes exist. A full jank Wasm runtime has not been linked or executed. The collector suite currently reports failure. Read the detailed evidence before reporting support or success.
+Native jank/Zig checks and small Wasm probes exist. A wasm64 runtime archive and spike link exist, but ordinary startup and tagged-reference collector correctness still fail. Real-runtime lifetime controls do not establish general Wasm support. Read the detailed evidence before reporting support or success.
 
 Keep downloaded SDKs, build outputs and logs under the experiment's ignored directories. Zig is pinned to 0.17.1 for these probes. Do not silently upgrade it or replace global tools.

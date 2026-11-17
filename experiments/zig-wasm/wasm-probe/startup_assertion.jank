@@ -1,0 +1,5 @@
+(ns startup-assertion)
+
+;; AI-assisted negative control: this must print an assertion failure.
+(defn -main [& _]
+  (assert false "startup diagnostic assertion"))

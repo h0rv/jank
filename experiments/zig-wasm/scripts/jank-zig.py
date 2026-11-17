@@ -8,10 +8,13 @@ import http.server
 import json
 import os
 import pathlib
+import re
+import shlex
 import shutil
 import subprocess
 import sys
 import threading
+from dataclasses import dataclass
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 REPO = ROOT.parent.parent
@@ -25,13 +28,75 @@ MARKERS = ('jank -> Zig: scalar and wide result checks passed',
            'jank -> Zig: borrowed-buffer checks passed')
 
 
+@dataclass(frozen=True)
+class Project:
+    root: pathlib.Path
+    name: str
+    main: str
+    jank: pathlib.Path
+    zig: pathlib.Path
+    expectations: dict[str, tuple[str, ...]]
+    wasm_check: str
+
+    @property
+    def out(self):
+        return OUT / self.name
+
+    def expected(self, target):
+        return self.expectations[target]
+
+
+def load_project(directory=ROOT):
+    root = pathlib.Path(directory).resolve()
+    try:
+        data = json.loads((root / 'jank-zig.json').read_text())
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f'Cannot read project config in {root}: {error}') from error
+    if not isinstance(data, dict):
+        raise RuntimeError('Project config must be an object')
+    name = data.get('name', root.name)
+    main = data.get('main')
+    if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]*', name):
+        raise RuntimeError('Project name must be a safe filename/library name')
+    if not isinstance(main, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]*', main):
+        raise RuntimeError('Project main must be an entry namespace')
+
+    def source(key, default, directory):
+        value = data.get(key, default)
+        if not isinstance(value, str) or not value or pathlib.Path(value).is_absolute():
+            raise RuntimeError(f'{key} must be a project-relative path')
+        path = (root / value).resolve()
+        if not path.is_relative_to(root) or not (path.is_dir() if directory else path.is_file()):
+            raise RuntimeError(f'Invalid {key} source path: {value}')
+        return path
+
+    jank = source('jank', 'src', True)
+    zig = source('zig', 'native.zig', False)
+    raw_expect = data.get('expect')
+    if isinstance(raw_expect, list):
+        raw_expect = {target: raw_expect for target in ('native', 'node', 'browser')}
+    if not isinstance(raw_expect, dict) or set(raw_expect) != {'native', 'node', 'browser'}:
+        raise RuntimeError('expect must be a line list or native/node/browser line lists')
+    expectations = {}
+    for target, lines in raw_expect.items():
+        if not isinstance(lines, list) or not lines or any(
+                not isinstance(line, str) or not line or '\n' in line or '\r' in line for line in lines):
+            raise RuntimeError(f'expect.{target} must contain nonempty exact stdout lines')
+        expectations[target] = tuple(lines)
+    mode = data.get('wasm_check', 'single')
+    if mode not in ('single', 'spike-continuous'):
+        raise RuntimeError('wasm_check must be single or spike-continuous')
+    return Project(root, name, main, jank, zig, expectations, mode)
+
+
 def command(args, **kwargs):
     return subprocess.run([str(x) for x in args], check=True, **kwargs)
 
 
-def docker(*args, root=False):
+def docker(*args, root=False, workdir=None):
     user = [] if root else ['--user', f'{os.getuid()}:{os.getgid()}']
-    return ['docker', 'exec', *user, CONTAINER, *map(str, args)]
+    directory = ['--workdir', str(workdir)] if workdir else []
+    return ['docker', 'exec', *user, *directory, CONTAINER, *map(str, args)]
 
 
 def logged(name, args, **kwargs):
@@ -123,37 +188,138 @@ def prerequisites():
 
 
 def build(app):
-    app = pathlib.Path(app).resolve()
-    for name in ['native.zig', 'jank/src/spike/core.jank']:
-        if not (app / name).is_file():
-            raise RuntimeError(f'App must contain {name}: {app}')
+    project = load_project(app)
     prerequisites()
-    stage = OUT / 'source'
-    if app == stage or stage in app.parents:
-        raise RuntimeError('App sources must be outside artifacts/app/source')
-    if stage.exists():
-        shutil.rmtree(stage)
-    stage.mkdir(parents=True)
-    shutil.copyfile(app / 'native.zig', stage / 'native.zig')
-    shutil.copyfile(app / 'build.zig' if (app / 'build.zig').is_file() else ROOT / 'build.zig', stage / 'build.zig')
-    shutil.copytree(app / 'jank/src', stage / 'jank/src', dirs_exist_ok=True)
-    host = ROOT / 'scripts/build-host-linux.sh'
-    logged('native', docker('env', f'JANK_ZIG_APP={stage}', 'bash', host, 'target-spike'))
-    logged('wasm-spill', docker('env', f'JANK_ZIG_APP={stage}', 'JANK_ZIG_APP_MODE=1', 'bash',
-                              ROOT / 'scripts/build-wasm64-target.sh', 'startup-spill'))
-    native = OUT / 'native'
-    native.mkdir(exist_ok=True)
-    shutil.copy2(ROOT / 'artifacts/jank-zig-cpp/jank-zig', native / 'spike')
-    wasm = OUT / 'wasm'
-    wasm.mkdir(exist_ok=True)
-    source = ROOT / 'artifacts/wasm64-spike'
-    shutil.copyfile(source / 'startup-spill.wasm', wasm / 'spike.wasm')
-    # Emscripten's launcher records the companion file's basename.
-    js = (source / 'startup-spill.js').read_text().replace('startup-spill.wasm', 'spike.wasm')
-    (wasm / 'spike.js').write_text("var Module = typeof Module !== 'undefined' ? Module : {};\n"
-                                 "Module.arguments ??= ['continuous', '20'];\n" + js)
-    shutil.copyfile(ROOT / 'scripts/app-index.html', wasm / 'index.html')
-    print('Built artifacts/app/native/spike\nBuilt artifacts/app/wasm/{spike.js,spike.wasm,index.html}')
+    if project.root.is_relative_to(OUT):
+        raise RuntimeError('Project sources must be outside artifacts/app')
+    for platform in ('native', 'wasm'):
+        stage = project.out / f'stage-{platform}'
+        if stage.exists():
+            shutil.rmtree(stage)
+        shutil.copytree(project.root, stage, ignore=shutil.ignore_patterns(
+            'artifacts', '.tools', '.git', 'target', 'zig-out', '.zig-cache', '__pycache__'))
+        if not (stage / 'build.zig').is_file():
+            template = (ROOT / 'scripts/project-build.zig').read_text()
+            (stage / 'build.zig').write_text(template.replace('__ZIG_ROOT__',
+                json.dumps(str(project.zig.relative_to(project.root)))).replace('__LIBRARY_NAME__',
+                json.dumps(project.name)))
+        prefix = stage / 'zig-out'
+        def run(label, args, **kwargs):
+            cwd = kwargs.pop('cwd', stage)
+            logged(f'{project.name}-{platform}-{label}', docker('env',
+                f'EM_CONFIG={TOOLS / "gc-wasm/emsdk/.emscripten"}',
+                f'ZIG_GLOBAL_CACHE_DIR={ROOT / ".zig-cache/global"}',
+                *args, workdir=cwd), **kwargs)
+        run('zig', [ZIG, 'build', '--build-file', stage / 'build.zig', '-Doptimize=ReleaseSafe',
+                    '--prefix', prefix, '--cache-dir', stage / '.zig-cache'])
+        modules, launcher = generate_sources(project, stage, platform, prefix, run)
+        if platform == 'native':
+            build_native(project, stage, prefix, modules, launcher, run)
+        else:
+            build_wasm(project, stage, modules, launcher, run)
+    print(f'Built {project.out / "native" / project.name}\nBuilt {project.out / "wasm"}')
+
+
+def generate_sources(project, stage, platform, prefix, run):
+    host = ROOT / 'artifacts/build-host/jank'
+    flags = ['env', 'LANG=C.UTF-8', 'LC_ALL=C.UTF-8',
+             f'JANK_RUNTIME_DIR={ROOT / "artifacts/host-resources"}',
+             host, '--reader-feature', platform,
+             '--module-path', stage / project.jank.relative_to(project.root),
+             '--target-dir', stage / 'target', '-L', prefix / 'lib', f'-l:{project.name}']
+    run('modules', [*flags, '--output-target', 'cpp', 'compile-module', project.main], cwd=stage)
+    # compile-module emits the transitive source dependencies while loading the entry.
+    # This cache belongs to a freshly created stage, never another build or platform.
+    modules = sorted((stage / 'target/_cache').rglob('*.cpp'))
+    if not modules:
+        raise RuntimeError('compile-module produced no C++ modules')
+    run('launcher', ['env', 'JANK_PRINT_CODEGEN=1', *flags, 'compile', project.main,
+                     '--name', 'host-launcher'], cwd=stage)
+    log = (LOGS / f'{project.name}-{platform}-launcher.log').read_text()
+    marker = '/* DO NOT MODIFY: Autogenerated by jank. */'
+    if marker not in log:
+        raise RuntimeError('Missing generated launcher')
+    launcher = stage / 'main.cpp'
+    launcher.write_text(log[log.index(marker):])
+    return modules, launcher
+
+
+def container_output(*args):
+    return subprocess.check_output(docker(*args), text=True).strip()
+
+
+def build_native(project, stage, prefix, modules, launcher, run):
+    runtime = ROOT / '.tools/host-install/lib/jank/0.1'
+    stdlib = pathlib.Path(container_output('g++-14', '-print-file-name=libstdc++.so'))
+    include = stdlib.parent / '../../../../include'
+    triple = container_output('g++-14', '-dumpmachine')
+    cpp = ['-nostdinc++', '-I', include / 'c++/14', '-I', include / triple / 'c++/14',
+           '-I', include / 'c++/14/backward']
+    flags = [ZIG, 'c++', '-std=c++20', '-O2', '-fPIC', '-fwrapv', '-femulated-tls', *cpp,
+             '-DGC_THREADS', '-DPOINTER_MASK=0x0000FFFFFFFFFFFF', '-DIMMER_HAS_LIBGC=1',
+             '-DIMMER_TAGGED_NODE=0', '-DBOOST_MP_STANDALONE=1', '-DFOLLY_HAVE_JEMALLOC=0',
+             '-DFOLLY_HAVE_TCMALLOC=0', '-DFOLLY_ASSUME_NO_JEMALLOC=1',
+             '-DFOLLY_ASSUME_NO_TCMALLOC=1', '-DJANK_VERSION="jank-0.1-alpha"',
+             '-I', runtime / 'include', '-Wno-deprecated-literal-operator',
+             '-Wno-return-type-c-linkage']
+    objects = []
+    for index, source in enumerate(modules):
+        obj = stage / f'module-{index}.o'
+        run(f'cpp-{index}', [*flags, '-c', source, '-o', obj])
+        objects.append(obj)
+    output = project.out / 'native' / project.name
+    output.parent.mkdir(parents=True, exist_ok=True)
+    gcc = pathlib.Path(container_output('g++-14', '-print-libgcc-file-name')).parent
+    run('link', [*flags, '-nostdlib++', launcher, *objects,
+                prefix / 'lib' / f'lib{project.name}.a',
+                ROOT / 'artifacts/build-target/libjank-static-runtime.a',
+                f'-L{gcc}', stdlib, container_output('g++-14', '-print-file-name=libgcc_s.so'),
+                '-o', output])
+
+
+def wasm_compile_flags(database):
+    entry = next(row for row in database if row['file'].endswith('/src/cpp/jank/runtime/context.cpp'))
+    args = iter(shlex.split(entry['command']))
+    flags = [next(args)]
+    for arg in args:
+        if arg in ('-o', '-MF', '-MT', '-MQ'):
+            next(args)
+        elif arg not in ('-c', '-MD', '-MMD', entry['file']):
+            flags.append(arg)
+    return flags, entry['directory']
+
+
+def build_wasm(project, stage, modules, launcher, run):
+    target = ROOT / 'artifacts/build-wasm64'
+    flags, cwd = wasm_compile_flags(json.loads((target / 'compile_commands.json').read_text()))
+    sources = [(launcher, ['-Dmain=jank_project_main']), *[(module, []) for module in modules],
+               (ROOT / 'wasm-probe/startup-driver.cpp', ['-DJANK_STARTUP_SPIKE_ONLY',
+                 '-DJANK_ENTRY_LAUNCHER=jank_project_main',
+                 f'-DJANK_ENTRY_NS="{project.main}"', '-DJANK_ENTRY_FN="-main"'])]
+    objects = []
+    for index, (source, extra) in enumerate(sources):
+        obj = stage / f'module-{index}.o'
+        run(f'cpp-{index}', [*flags, '-O2', '-g', *extra, '-c', source, '-o', obj], cwd=cwd)
+        objects.append(obj)
+    zig = stage / 'kernel.o'
+    run('kernel', [ZIG, 'build-obj', stage / project.zig.relative_to(project.root),
+                  '-target', 'wasm64-freestanding', '-O', 'ReleaseSafe', f'-femit-bin={zig}',
+                  '--cache-dir', stage / '.zig-cache'])
+    output = project.out / 'wasm'
+    output.mkdir(parents=True, exist_ok=True)
+    js = output / f'{project.name}.js'
+    run('link', [flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1',
+                '-fwasm-exceptions', '-sALLOW_MEMORY_GROWTH=1', '-sEXIT_RUNTIME=1',
+                *objects, zig, target / 'libjank-static-runtime.a', '-Wl,--error-limit=0', '-o', js])
+    run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm')])
+    arguments = ['continuous', '20'] if project.wasm_check == 'spike-continuous' else ['static-roots']
+    js.write_text("var Module = typeof Module !== 'undefined' ? Module : {};\n"
+                  f'Module.arguments ??= {json.dumps(arguments)};\n' + js.read_text())
+    config = json.dumps({'expect': project.expected('browser'), 'arguments': arguments,
+                         'continuous': project.wasm_check == 'spike-continuous',
+                         'script': js.name}).replace('<', '\\u003c')
+    page = (ROOT / 'scripts/app-index.html').read_text().replace('__PROJECT_CONFIG__', config)
+    (output / 'index.html').write_text(page)
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -162,9 +328,10 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 @contextlib.contextmanager
-def server(port=0, bind='127.0.0.1'):
+def server(port=0, bind='127.0.0.1', project=None):
+    project = project or load_project()
     def handler(*args, **kwargs):
-        return QuietHandler(*args, directory=str(OUT / 'wasm'), **kwargs)
+        return QuietHandler(*args, directory=str(project.out / 'wasm'), **kwargs)
     with http.server.ThreadingHTTPServer((bind, port), handler) as httpd:
         thread = threading.Thread(target=httpd.serve_forever, daemon=True)
         thread.start()
@@ -186,11 +353,11 @@ class PageResult(html.parser.HTMLParser):
         attrs = dict(attrs)
         if tag == 'html':
             self.status = attrs.get('data-status')
-        if tag == 'pre' and attrs.get('id') == 'stdout':
+        if attrs.get('id') in ('stdout', 'app'):
             self.in_output = True
 
     def handle_endtag(self, tag):
-        if tag == 'pre':
+        if tag in ('pre', 'div'):
             self.in_output = False
 
     def handle_data(self, data):
@@ -198,63 +365,79 @@ class PageResult(html.parser.HTMLParser):
             self.output += data
 
 
-def valid_markers(output):
-    return all(marker in output.splitlines() for marker in MARKERS)
+def valid_markers(output, expected=MARKERS):
+    return all(marker in output.splitlines() for marker in expected)
 
 
-def browser_check():
-    with server() as url:
+def browser_check(project=None):
+    project = project or load_project()
+    with server(project=project) as url:
         profile = ROOT / 'artifacts/app-chrome-profile'
         result = subprocess.run(['google-chrome', '--headless', '--no-sandbox', '--disable-gpu',
             '--no-first-run', '--disable-dev-shm-usage', f'--user-data-dir={profile}',
             '--virtual-time-budget=30000', '--timeout=60000', '--dump-dom', url],
             capture_output=True, text=True, timeout=90)
-    (LOGS / 'browser-dom.html').write_text(result.stdout)
-    (LOGS / 'browser-stderr.log').write_text(result.stderr)
+    (LOGS / f'{project.name}-browser-dom.html').write_text(result.stdout)
+    (LOGS / f'{project.name}-browser-stderr.log').write_text(result.stderr)
     page = PageResult()
     page.feed(result.stdout)
-    return result.returncode == 0 and page.status == 'pass' and valid_markers(page.output), page.output
+    ok = result.returncode == 0 and page.status == 'pass' and valid_markers(
+        page.output, project.expected('browser'))
+    if project.wasm_check == 'spike-continuous':
+        ok = validate_continuous(project, 'browser', page.output, result.returncode) and ok
+    return ok, page.output
 
 
-def execute(target):
+def validate_continuous(project, target, output, status):
+    path = LOGS / f'{project.name}-{target}-run.log'
+    path.write_text(output)
+    check = subprocess.run([sys.executable, ROOT / 'wasm-probe/startup-safepoints-check.py',
+        path, 'continuous', '20', str(status)], capture_output=True, text=True)
+    return check.returncode == 0
+
+
+def execute(target, project=None):
+    project = project or load_project()
     LOGS.mkdir(parents=True, exist_ok=True)
     if target == 'browser':
-        return browser_check()
+        return browser_check(project)
     container()
-    args = ([OUT / 'native/spike'] if target == 'native' else
-            [NODE, OUT / 'wasm/spike.js'])
+    args = ([project.out / 'native' / project.name] if target == 'native' else
+            [NODE, project.out / 'wasm' / f'{project.name}.js'])
     result = subprocess.run(docker(*args), capture_output=True, text=True, timeout=120)
     output = result.stdout + result.stderr
-    ok = result.returncode == 0 and valid_markers(output)
-    (LOGS / f'{target}-run.log').write_text(output)
-    if target == 'node':
-        check = subprocess.run([sys.executable, ROOT / 'wasm-probe/startup-safepoints-check.py',
-            LOGS / 'node-run.log', 'continuous', '20', str(result.returncode)],
-            capture_output=True, text=True)
-        output += check.stdout + check.stderr
-        ok = ok and check.returncode == 0
+    ok = result.returncode == 0 and valid_markers(result.stdout, project.expected(target))
+    (LOGS / f'{project.name}-{target}-run.log').write_text(output)
+    if target == 'node' and project.wasm_check == 'spike-continuous':
+        ok = validate_continuous(project, target, output, result.returncode) and ok
     return ok, output
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
-    sub.add_parser('build').add_argument('app_dir', nargs='?', default=str(ROOT))
-    sub.add_parser('run').add_argument('target', choices=['native', 'node', 'browser'])
-    sub.add_parser('check')
-    sub.add_parser('serve').add_argument('--port', type=int, default=8765)
+    for action in ('build', 'run', 'check', 'serve'):
+        action_parser = sub.add_parser(action)
+        if action == 'run':
+            action_parser.add_argument('target', choices=['native', 'node', 'browser'])
+        if action == 'serve':
+            action_parser.add_argument('--port', type=int, default=8765)
+        action_parser.add_argument('app_dir', nargs='?', default=str(ROOT))
     args = parser.parse_args()
     if args.action == 'build':
         build(args.app_dir)
         return 0
-    if not (OUT / 'wasm/index.html').is_file() or not (OUT / 'native/spike').is_file():
+    project = load_project(args.app_dir)
+    if args.action == 'check':
+        build(args.app_dir)
+    if not (project.out / 'wasm/index.html').is_file() or not (project.out / 'native' / project.name).is_file():
         raise RuntimeError('Missing app outputs; run ./jank-zig build first')
     if args.action == 'serve':
-        with server(args.port) as url:
+        with server(args.port, project=project) as url:
             print(f'Serving {url} (Ctrl-C to stop)', flush=True)
             threading.Event().wait()
     elif args.action == 'run' and args.target == 'browser':
-        with server(8765) as url:
+        with server(8765, project=project) as url:
             print(f'Opening {url}; Ctrl-C to stop the server', flush=True)
             subprocess.Popen(['google-chrome', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             threading.Event().wait()
@@ -263,7 +446,7 @@ def main():
         verdicts = []
         for target in targets:
             try:
-                ok, output = execute(target)
+                ok, output = execute(target, project)
             except (OSError, subprocess.SubprocessError, RuntimeError) as error:
                 ok, output = False, str(error)
             if args.action == 'run' or not ok:

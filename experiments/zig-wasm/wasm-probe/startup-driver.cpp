@@ -7,7 +7,17 @@
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/obj/persistent_string.hpp>
 
-int jank_spike_main(int argc, char const **argv);
+#ifndef JANK_ENTRY_NS
+#define JANK_ENTRY_NS "spike.core"
+#endif
+#ifndef JANK_ENTRY_FN
+#define JANK_ENTRY_FN "-main"
+#endif
+#ifndef JANK_ENTRY_LAUNCHER
+#define JANK_ENTRY_LAUNCHER jank_spike_main
+#endif
+
+int JANK_ENTRY_LAUNCHER(int argc, char const **argv);
 #ifndef JANK_STARTUP_SPIKE_ONLY
 int jank_assertion_main(int argc, char const **argv);
 #endif
@@ -39,7 +49,7 @@ namespace
 
   [[gnu::noinline]] void reenter()
   {
-    jank_call0(jank_deref(jank_var_intern_c("spike.core", "-main")));
+    jank_call0(jank_deref(jank_var_intern_c(JANK_ENTRY_NS, JANK_ENTRY_FN)));
   }
 
   [[gnu::noinline]] void churn()
@@ -97,7 +107,7 @@ int main(int argc, char const **argv)
     {
       std::printf("%s BEGIN: iteration=%ld/%ld\n", prefix, iteration, iterations);
       std::fflush(stdout);
-      if(iteration == 1) { status = jank_spike_main(argc, argv); }
+      if(iteration == 1) { status = JANK_ENTRY_LAUNCHER(argc, argv); }
       else { reenter(); }
       if(collect_at_safepoints) { safepoint("after-entry"); }
       if(with_churn)
@@ -118,9 +128,9 @@ int main(int argc, char const **argv)
 #ifndef JANK_STARTUP_SPIKE_ONLY
   int const status{ argc > 2 && std::strcmp(argv[2], "assertion") == 0
                       ? jank_assertion_main(argc, argv)
-                      : jank_spike_main(argc, argv) };
+                      : JANK_ENTRY_LAUNCHER(argc, argv) };
 #else
-  int const status{ jank_spike_main(argc, argv) };
+  int const status{ JANK_ENTRY_LAUNCHER(argc, argv) };
 #endif
   memory("after-spike");
   std::printf("startup diagnostic: exit=%d collections=%zu gc-disabled=%d\n", status,

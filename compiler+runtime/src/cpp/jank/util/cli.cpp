@@ -122,6 +122,8 @@ OPTIONS
           --module-path <path>
                               A colon separated list of directories, JAR files, and ZIP files
                               to search for modules.
+          --reader-feature <name>
+                              Add a reader-conditional feature keyword (repeatable).
   -p,     --port <port number>
                               The port number to bind when running a jank nrepl server.
                               Pass 0 or omit to use a random available port.
@@ -367,6 +369,10 @@ OPTIONS
           {
             throw util::format("Invalid runtime type '{}'.", value);
           }
+        }
+        else if(check_flag(it, end, value, "--reader-feature", true))
+        {
+          opts.reader_features.emplace_back(value);
         }
         else if(check_flag(it, end, value, "-I", "--include-dir", true))
         {

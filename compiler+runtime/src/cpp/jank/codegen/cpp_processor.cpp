@@ -1029,12 +1029,14 @@ namespace jank::codegen
     {
       if(analyze::cpp_util::is_any_object(inst->value.unwrap().type))
       {
-        /* We static_cast to object_ref here, since we'll be trying to catch an object_ref in any
-         * try/catch forms. This loses us our type info, but C++ doesn't do implicit conversions
-         * when catching and we're not using inheritance. */
-        util::format_to(b.body_buffer,
-                        "throw static_cast<jank::runtime::object_ref>({});\n",
-                        inst->value.unwrap().name);
+        util::format_to(
+          b.body_buffer,
+          "jank::runtime::throw_object(static_cast<jank::runtime::object_ref>({}));\n",
+          inst->value.unwrap().name);
+      }
+      else if(analyze::cpp_util::is_error_ref(inst->value.unwrap().type))
+      {
+        util::format_to(b.body_buffer, "jank::throw_error({});\n", inst->value.unwrap().name);
       }
       else
       {

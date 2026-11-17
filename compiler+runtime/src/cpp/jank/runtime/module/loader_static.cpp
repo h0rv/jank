@@ -27,11 +27,11 @@ namespace jank::runtime::module
 
   jtl::result<file_view, error_ref> read_jar_file(jtl::immutable_string const &)
   {
-    throw error::runtime_static_feature_disabled("jar reading");
+    jank::throw_error(error::runtime_static_feature_disabled("jar reading"));
   }
 
   jtl::result<file_view, error_ref> loader::read_module(jtl::immutable_string const &)
   {
-    throw error::runtime_static_feature_disabled("read_module");
+    jank::throw_error(error::runtime_static_feature_disabled("read_module"));
   }
 }

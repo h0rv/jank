@@ -8,6 +8,24 @@
 
 namespace jank::runtime
 {
+  /* Keep the tagged word live across allocation, outside exception storage. */
+  void **detail::allocate_exception_root(void * const value) noexcept
+  {
+    auto const root{ static_cast<void **>(GC_MALLOC_UNCOLLECTABLE(sizeof(void *))) };
+    /* Exception copying must not throw. Continuing without a root is unsafe. */
+    if(!root)
+    {
+      std::terminate();
+    }
+    GC_PTR_STORE_AND_DIRTY(root, value);
+    return root;
+  }
+
+  void throw_object(object_ref const value)
+  {
+    throw thrown_object{ value };
+  }
+
   object::object(object const &rhs) noexcept
     : type{ rhs.type }
   {
@@ -199,100 +217,114 @@ namespace jank::runtime
 
   bool object::contains(object_ref const) const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "get",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "get",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   object_ref object::find(object_ref const) const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "find",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "find",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   object_ref object::nth(object_ref const) const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "indexable",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "indexable",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   object_ref object::nth(object_ref const, object_ref const) const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "indexable",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "indexable",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   i64 object::compare(object const &) const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "compare",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "compare",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   void object::set_validator(object_ref const)
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "ref_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "ref_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   object_ref object::get_validator() const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "ref_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "ref_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   void object::add_watch(object_ref const, object_ref const)
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "ref_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "ref_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   void object::remove_watch(object_ref const)
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "ref_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "ref_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   i64 object::to_integer() const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "number_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "number_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   f64 object::to_real() const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "number_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "number_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   object_ref object::seq() const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "seqable",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "seqable",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   object_ref object::first() const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "sequence_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "sequence_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   object_ref object::next() const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "sequence_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "sequence_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   object_ref object::fresh_seq() const
@@ -307,30 +339,34 @@ namespace jank::runtime
 
   object_ref object::deref()
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "deref",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "deref",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   array_element_type object::get_element_type() const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "array_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "array_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   object_ref object::aset(i64 const, object_ref const)
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "array_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "array_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   object_ref object::aclone() const
   {
-    throw error::runtime_unsupported_behavior(type,
-                                              "array_like",
-                                              object_source(runtime::detail::untagged(this)));
+    jank::throw_error(
+      error::runtime_unsupported_behavior(type,
+                                          "array_like",
+                                          object_source(runtime::detail::untagged(this))));
   }
 
   bool very_equal_to::operator()(object_ref const lhs, object_ref const rhs) const noexcept

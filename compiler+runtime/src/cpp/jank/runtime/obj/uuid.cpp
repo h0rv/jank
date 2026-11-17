@@ -1,3 +1,4 @@
+#include <jank/runtime/throw.hpp>
 #include <uuid.h>
 
 #include <jank/runtime/core/make_box.hpp>
@@ -23,7 +24,7 @@ namespace jank::runtime::obj
     }
     else
     {
-      throw make_box(util::format("Invalid UUID string: {}", s)).erase();
+      jank::runtime::throw_object(make_box(util::format("Invalid UUID string: {}", s)).erase());
     }
   }
 

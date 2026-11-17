@@ -19,9 +19,12 @@ namespace jank::util
     };
     CHECK_EQ(invoke([] {}), 0);
     CHECK_EQ(invoke([] { throw std::runtime_error{ "test" }; }), 1);
-    CHECK_EQ(invoke([] { throw runtime::object_ref{}; }), 2);
-    CHECK_EQ(invoke([] { throw make_error(error::kind::runtime_uncaught_exception,
-                                          read::source::unknown()); }), 3);
+    CHECK_EQ(invoke([] { runtime::throw_object(runtime::object_ref{}); }), 2);
+    CHECK_EQ(invoke([] {
+               throw_error(
+                 make_error(error::kind::runtime_uncaught_exception, read::source::unknown()));
+             }),
+             3);
     CHECK_EQ(invoke([] { throw 42; }), 4);
   }
 }

@@ -245,8 +245,9 @@ namespace jank::util
         auto const xcrun_path{ llvm::sys::findProgramByName("xcrun") };
         if(!xcrun_path)
         {
-          throw error::system_failure("Unable to find 'xcrun' binary. Please make sure you have "
-                                      "the XCode developer tools installed.");
+          jank::throw_error(
+            error::system_failure("Unable to find 'xcrun' binary. Please make sure you have "
+                                  "the XCode developer tools installed."));
         }
 
         auto const proc_code{ llvm::sys::ExecuteAndWait(*xcrun_path,
@@ -255,18 +256,19 @@ namespace jank::util
                                                         { std::nullopt, path_tmp, std::nullopt }) };
         if(proc_code < 0)
         {
-          throw error::system_failure(util::format("Unable to run '{}'. Please make sure you have "
-                                                   "the XCode developer tools properly installed.",
-                                                   *xcrun_path));
+          jank::throw_error(
+            error::system_failure(util::format("Unable to run '{}'. Please make sure you have "
+                                               "the XCode developer tools properly installed.",
+                                               *xcrun_path)));
         }
         std::ifstream ifs{ path_tmp };
         std::getline(ifs, sdk_path);
         if(sdk_path.empty())
         {
-          throw error::system_failure(
+          jank::throw_error(error::system_failure(
             util::format("Unable to get a valid path from '{}'. Please make sure you have the "
                          "XCode developer tools properly installed.",
-                         *xcrun_path));
+                         *xcrun_path)));
         }
       }
 

@@ -273,6 +273,7 @@
     clojure.string-test.upper-case
     jank-test.string-join
     jank-test.native-vector-sequence
+    jank-test.integer-range
   ])
 
 (def windows? (= cpp/jtl.current_platform cpp/jtl.platform.windows_like))

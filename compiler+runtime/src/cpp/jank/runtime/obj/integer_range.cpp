@@ -1,4 +1,5 @@
 #include <jank/runtime/obj/integer_range.hpp>
+#include <jank/runtime/obj/array_chunk.hpp>
 #include <jank/runtime/core/math.hpp>
 #include <jank/runtime/core/make_box.hpp>
 #include <jank/runtime/core/seq.hpp>
@@ -112,21 +113,58 @@ namespace jank::runtime::obj
 
   object_ref integer_range::next() const
   {
-    if(count() <= 1)
+    i64 val{};
+    if(__builtin_add_overflow(start, step, &val) || bounds_check(val, end))
     {
       return {};
     }
-    return make_box<integer_range>(start + step, end, step, bounds_check);
+    return make_box<integer_range>(val, end, step, bounds_check);
   }
 
   object_ref integer_range::next_in_place()
   {
-    if(count() <= 1)
+    i64 val{};
+    if(__builtin_add_overflow(start, step, &val) || bounds_check(val, end))
     {
       return {};
     }
-    start += step;
+    start = val;
     return runtime::detail::untagged(this);
+  }
+
+  array_chunk_ref integer_range::chunked_first() const
+  {
+    native_vector<object_ref> buffer;
+    buffer.reserve(chunk_size);
+    i64 val{ start };
+    for(usize i{}; i < chunk_size; ++i)
+    {
+      buffer.emplace_back(make_box(val));
+      if(__builtin_add_overflow(val, step, &val) || bounds_check(val, end))
+      {
+        break;
+      }
+    }
+    return make_box<array_chunk>(std::move(buffer), usize{});
+  }
+
+  integer_range_ref integer_range::chunked_next() const
+  {
+    i64 val{ start };
+    for(usize i{}; i < chunk_size; ++i)
+    {
+      if(__builtin_add_overflow(val, step, &val) || bounds_check(val, end))
+      {
+        return {};
+      }
+    }
+    return make_box<integer_range>(val, end, step, bounds_check);
+  }
+
+  object_ref integer_range::chunked_more() const
+  {
+    auto const more{ chunked_next() };
+    return more.is_nil() ? object_ref{ persistent_list::empty() } : more.erase();
   }
 
   cons_ref integer_range::conj(object_ref const head) const
@@ -191,15 +229,9 @@ namespace jank::runtime::obj
       throw std::runtime_error("integer_range step shouldn't be 0.");
     }
 
-    auto const diff{ end - start };
-    auto const offset{ s > 0 ? -1 : 1 };
-
-    if((s > 0 && diff > std::numeric_limits<i64>::max() - s + offset)
-       || (s < 0 && diff < std::numeric_limits<i64>::min() - s + offset))
-    {
-      throw std::runtime_error("integer_range overflow occurred in arithmetic.");
-    }
-
-    return static_cast<size_t>((diff + offset + s) / s);
+    auto const diff{ s > 0 ? static_cast<u64>(end) - static_cast<u64>(start)
+                           : static_cast<u64>(start) - static_cast<u64>(end) };
+    auto const stride{ s > 0 ? static_cast<u64>(s) : u64{} - static_cast<u64>(s) };
+    return static_cast<usize>(diff / stride + (diff % stride != 0));
   }
 }

@@ -1815,6 +1815,181 @@ this benchmark adds no claim about general rooting or exception safety.
 Raw seven-sample timings, per-run logs, binaries and results stay under ignored
 `artifacts/spill-cost/`; the full native suite and browser were not rerun.
 
+### wasm64 first-entry follow-up: compact locals after spilling
+
+This AI-assisted follow-up supersedes the transform/timing description above,
+not its historical measurements. After merging `origin/main` at `654557e8d`,
+the shared `wasm-probe/spill-pointers.py` now runs:
+
+```text
+--flatten --spill-pointers --reorder-locals --coalesce-locals --reorder-locals -g
+```
+
+Both `jank-build` and the compatibility `jank-zig` entry point use that helper.
+No runtime, collector patch, spill-slot allocation/zeroing, stack size, or GC
+policy changed. Reordering first removes unused locals before the nonlinear
+coalescing pass; the final reorder removes unused indices and favors frequent
+accesses. This deliberately does not enable a general `-O2` post-spill pipeline.
+
+#### Diagnosis
+
+The dominant regression is **V8 lazy baseline compilation of functions with
+enormous flattened local sets**, rather than collections during initialization:
+
+* A named `node --cpu-prof` run charged about **2.912 s** of samples to
+  `jank::runtime::obj::jit_function::call() const`, and another **0.211 s** to
+  the generated launcher callback. Those caller samples alone do not distinguish
+  lazy compilation from execution. A separate `--trace-wasm-compilation-times`
+  run does: Liftoff compilation of `jank_load_clojure_core_0` took
+  **2,900,163 µs**, with 5,396,666,144 bytes of reported compiler allocation;
+  `jank_load_clojure_core` took **187,628 µs**. The loader functions are actually
+  compiled on first entry, not merely present in the binary. Compilation work
+  sums are not an exact subtraction from wall time (tiers can overlap).
+* After compaction, a diagnostic trace measured the corresponding compilations
+  at **27,563 µs** and **46,172 µs**. The table below shows the same functions'
+  encoded code bodies and declared non-parameter locals; these are binary
+  section measurements, not estimates from WAT text.
+
+| Function | Unspilled bytes / locals | Flatten+spill bytes / locals | Compacted bytes / locals |
+| --- | ---: | ---: | ---: |
+| `jank_load_clojure_core_0` | 175,622 / 12 | 914,093 / 46,243 | 507,172 / 13 |
+| `jank_load_clojure_core` | 56,850 / 40 | 731,545 / 14,488 | 589,478 / 43 |
+
+* The final matched GC-disabled measurements still show **3,441.739 ms** before
+  compaction, with **zero collections and zero collection milliseconds**.
+  With GC enabled, both spill variants perform **14** init collections;
+  Boehm's `GC_start_performance_measurement` /
+  `GC_get_full_gc_total_time` report median full-collection time of **31 ms**
+  before and **32 ms** after. This timer has millisecond resolution and is not
+  a timer for all allocation work. Collections cannot explain the seconds-long
+  difference that also occurs with collection disabled.
+* Single-process flag probes on the original named module measured first entry
+  at **3,344 ms** by default, **3,436 ms** with `--liftoff-only`, **3,332 ms**
+  with `--wasm-dynamic-tiering`, and **3,337 ms** with
+  `--no-wasm-dynamic-tiering`. `--no-liftoff` aborted with
+  `FATAL ERROR: Zone Allocation failed - process out of memory`.
+  A bounded `--no-wasm-lazy-compilation` attempt produced no timing or success
+  markers despite exit 0; it is an unusable sample, not a speedup. Changing
+  engine flags is not the implemented fix.
+* A separately relinked **16-MiB** stack control still took **3,315 ms** with
+  the original transform and GC disabled. The measured/fixed path retains
+  main's **4-MiB** stack. Increasing the stack does not remove the regression.
+* The full final module retains exactly **815,307 Store**, **8,366 MemoryFill**,
+  **51,419 GlobalSet**, **107,915 Call**, **9,131 CallIndirect**, **30,903 Try**,
+  and **21,362 Rethrow** operations after compaction. Total locals fall from
+  **1,210,551 to 56,032**. Unchanged zeroing operations plus the compilation
+  traces argue against spill-slot zeroing as the dominant cost. Zeroing time
+  was not separately instrumented; the remaining ~0.28 s is not fully split
+  into engine, allocation, and jank execution costs.
+
+`ReorderLocals.cpp` only remaps local indices/removes unused locals.
+`CoalesceLocals.cpp::applyIndices` rewrites local accesses/copies and replaces
+dead local sets with their values (or drops), preserving evaluation of those
+values. Its “dead stores” comment concerns **local.set**, not memory stores.
+No pass here deletes the memory spill stores, moves them past calls, or changes
+the reserved shadow-stack frame. Counts alone are not a proof of rooting:
+the focused callback/unwind fixture and real-runtime matrix below additionally
+exercise the resulting roots. This remains bounded evidence for this pinned
+Binaryen and runtime, not a proof for arbitrary optimizations or pointer carriers.
+
+#### Matched before/after measurement
+
+Seven fresh processes per row, medians; same release archives and app
+`-O2 -g`, Zig **0.17.1 / ReleaseSafe**, Emscripten **7.0.0**, Node **26.13.1**,
+private Binaryen **a9141c8cc**, and 4-MiB stack. The harness uses the freshly
+generated `artifacts/app/spike/stage-{native,wasm}` sources from current
+`jank-build`, not the retired `artifacts/app/source` cache. Only the post-spill
+local passes differ between the two spill binaries. “Startup” ends before
+jank; “first entry” includes jank/core initialization and the initial spike
+call; warm calls retain the prior 1,000 warm-up / 10,000 timed-call method.
+
+| Variant | Raw bytes | gzip bytes | Pre-jank startup ms | First entry ms | Warm µs/call |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Native, GC enabled | 9,208,832 | 2,647,646 | N/A | 65.744 | 1.769 |
+| wasm64 unspilled, GC disabled | 10,497,184 | 2,030,209 | 45.016 | 150.094 | 4.003 |
+| Before: flatten+spill, GC disabled | 25,454,130 | 5,874,498 | 64.183 | 3,441.739 | 7.757 |
+| After: compacted spill, GC disabled | 18,572,180 | 2,604,743 | 53.680 | 285.001 | 6.974 |
+| Before: flatten+spill, GC enabled | 25,454,130 | 5,874,498 | 70.771 | 3,470.479 | 8.540 |
+| After: compacted spill, GC enabled | 18,572,180 | 2,604,743 | 52.461 | 280.719 | 6.872 |
+
+First entry improves **12.1× / 91.7%** with GC disabled and **12.4× / 91.9%**
+with GC enabled. Raw size falls **27.0%**, gzip **55.7%**. Stripped size-only
+companions are **4,448,076 / 17,085,555 / 12,663,367 bytes** for unspilled /
+before / after. Warm-call changes are much smaller and noisier than the
+first-entry improvement; raw samples remain in `artifacts/spill-cost/results.json`.
+All six rows require both marker lines before and after timing, clean exit,
+and the expected GC state; unspilled/GC-disabled remains a diagnostic control.
+
+**Tradeoff:** local coalescing is expensive at build time: one application
+transform took **214 s** in this container. That one-time cost is excluded from
+runtime startup measurements. Debug names remain, but DWARF locations are not
+trusted after flatten/coalesce (Binaryen warns about their incompatibility).
+This change does not close the separately documented thrown-payload root gap.
+
+Reproduce sequentially from this directory (do not rebuild/check concurrently
+with measurement, since `check` recreates the staged sources):
+
+```sh
+./jank-zig check
+./jank-zig run node
+docker exec --user 1000:1000 jank-host-build \
+  python3 scripts/measure-spill-cost.py --self-test
+docker exec --user 1000:1000 jank-host-build \
+  python3 scripts/measure-spill-cost.py --compare-startup \
+  > artifacts/logs/spill-startup-cost.log 2>&1
+docker exec --user 1000:1000 jank-host-build \
+  python3 wasm-probe/spill-compaction-test.py
+docker exec --user 1000:1000 jank-host-build \
+  bash scripts/build-wasm64-target.sh gc-roots
+docker exec --user 1000:1000 jank-host-build \
+  bash scripts/build-wasm64-target.sh startup-spill
+python3 wasm-probe/spill-function-sizes.py artifacts/spill-cost/plain.wasm \
+  artifacts/spill-cost/spill-before.wasm artifacts/spill-cost/spill.wasm
+docker exec --user 1000:1000 jank-host-build \
+  .tools/node-v26.13.1-linux-x64/bin/node --cpu-prof \
+  --cpu-prof-dir=artifacts/spill-cost artifacts/spill-cost/spill-before.js no-gc
+# Substitute --trace-wasm-compilation-times or the engine flags above for --cpu-prof.
+```
+
+If the reused host compiler rejects `--reader-feature`, refresh it with the
+documented `docker exec --user 1000:1000 jank-host-build bash
+scripts/build-host-linux.sh host` first. No host SDK/system installation is needed.
+
+Validation output (all checked by markers, not exit status alone):
+
+```text
+SPILL COST VERDICT: PASS
+SPILL COST SELF-TEST: PASS (normal, empty, missing records, markers, GC state)
+SPILL UNWIND: iterations=10000 catch-stack-drift=0
+SPILL COMPACTION VERDICT: PASS (stores, zeroing, calls and unwind effects retained)
+spill-exception-roots locals: PASS (exit=0)
+spill-exception-roots nested: PASS (exit=0)
+spill-exception-roots temporary: PASS (exit=0)
+spill-exception-roots runtime-internal: PASS (exit=0)
+spill-exception-roots registered-global: PASS (exit=0)
+spill-exception-roots unregistered-global: PASS (exit=0)
+spill-exception-roots reclaim-control: PASS (exit=0)
+spill-exception-roots operand: PASS (exit=0)
+spill-exception-roots exception-local: PASS (exit=0)
+spill-exception-roots exception-payload: PASS (exit=0)
+spill-exception-roots exception-stack: PASS (exit=0)
+STARTUP SPILL VERDICT: PASS
+TARGET   VERDICT
+native   PASS
+node     PASS
+browser  PASS
+```
+
+The plain spill variant passes the original seven lifetime cases, operand,
+exception-local, and exception-stack; exception-payload still fails without
+the existing explicit exception-storage-root control, just as natively.
+Default/static-only/shadow/Asyncify controls retain their documented failures;
+the matrix's registered-exception native and Wasm success gates passed.
+`run node` prints both markers for all **20** entries, GC enabled. The automated
+headless browser marker check also passed; there was no interactive visual
+check or full native test-suite rerun. Diagnostic logs/profiles and metrics
+remain ignored under `artifacts/spill-startup-diagnosis` and `artifacts/logs`.
+
 ### wasm64 spill follow-up: operand stacks and exception paths
 
 This is a collector-only extension of PR #12, using the same real runtime

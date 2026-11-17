@@ -1065,6 +1065,50 @@ No core startup, generated modules, JIT, browser, concurrency, arbitrary Wasm
 address ranges, or complete spike correctness is tested here. No runtime source
 change or supported production rooting strategy is claimed.
 
+### Main merge and target-config regression checks
+
+The AI-assisted merge of main into `devin/1794875064-apply-target-config`
+preserves both historical sections above, the width-parameterized Wasm helper,
+and the target-config changes. The only textual conflict was in this README.
+`check-target-config.py` now tests both widths' host-path filtering and an
+unflagged wasm32 triple query. Its generated-config check accepts `WASM_BITS=32`
+(default 64), matching the build helper:
+
+```sh
+WASM_BITS=32 python3 scripts/check-target-config.py \
+  --generated artifacts/build-wasm32/target_config.json
+```
+
+Post-merge Ubuntu 24.04 results: host configure/build exited 0 in 1/128 s;
+native `jank-test` exited 0 in 12 s:
+
+```text
+tested 870 jank files with 9 skips and 0 failures
+[doctest] test cases:  129 |  129 passed | 0 failed | 0 skipped
+[doctest] assertions: 2031 | 2031 passed | 0 failed |
+[doctest] Status: SUCCESS!
+```
+
+Configure-only regression: **8 tests, OK**. Wasm64 configure exited 0 in 3 s;
+wasm32 dependencies/configure exited 0 in 2/59 s. Both generated JSON checks
+passed triple, `NOTFOUND`, host LLVM and host-resource assertions. Wasm32 records
+`wasm32-unknown-emscripten` without MEMORY64; wasm64 records
+`wasm64-unknown-emscripten` with MEMORY64. Neither needs a triple override.
+
+The wasm64 runtime archive rebuilt successfully (58 s), and SDK installation
+returned 0 before running `check-target-aot.py`. Its recording compiler verified
+the configured `em++`, `--target=wasm64-unknown-emscripten` and no host
+LLVM/resource paths; inspection reported `Format: WASM`, `Arch: wasm64`,
+`AddressSize: 64bit`. Missing/failing compiler negative controls exited 1 as
+expected; native default AOT compile/run and empty compiler/triple fallback
+exited 0. Full commands/results are in ignored
+`artifacts/logs/merge-target-aot.log` and `merge-wasm64-install.log`.
+
+No wasm32 archive/AOT/link/run was attempted in this merge check: successful
+configuration does not fix the previously documented runtime pointer-width
+blockers. No wasm64 application link/run or GC-root matrix was repeated here;
+the runtime correctness limitations above remain.
+
 ## Files
 
 `native.zig` contains the implementation and three unit tests. It exports widening arithmetic and a borrowed-buffer function with explicit status values. The jank caller tests scalar arguments, a 64-bit result, and the borrowed-buffer cases below.

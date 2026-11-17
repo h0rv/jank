@@ -331,7 +331,7 @@ function abort(what) {
 var wasmBinaryFile;
 
 function findWasmBinary() {
-  return locateFile('pacman.wasm');
+  return locateFile('flappy-bird.wasm');
 }
 
 function getBinarySync(file) {
@@ -7721,6 +7721,7 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
 
 
 
+
   /** @param {number=} timeout */
   var safeSetTimeout = (func, timeout) => {
       
@@ -9607,6 +9608,7 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
   var _glCullFace = _emscripten_glCullFace;
   var _glDeleteProgram = _emscripten_glDeleteProgram;
   var _glDeleteShader = _emscripten_glDeleteShader;
+  var _glDeleteTextures = _emscripten_glDeleteTextures;
   var _glDepthFunc = _emscripten_glDepthFunc;
   var _glDisable = _emscripten_glDisable;
   var _glDrawArrays = _emscripten_glDrawArrays;
@@ -9694,51 +9696,51 @@ if (Module['printErr']) err = Module['printErr'];
 // end include: postlibrary.js
 
 var ASM_CONSTS = {
-  622592: () => { const n = Module.jankCollectEvery ?? 1; return Number.isInteger(n) && n >= 1 && n <= 60 ? n : 1; },  
- 622693: ($0, $1, $2, $3, $4) => { Module.jankFrameStats = ({frames: Number($0), collections: Number($1), heap: Number($2), used: Number($3), memory: HEAPU8.buffer.byteLength, time: performance.now(), collectEvery: $4}); Module.onJankFrame?.(Module.jankFrameStats); },  
- 622928: () => { if (document.fullscreenElement) return 1; },  
- 622974: () => { return Module.canvas.width; },  
- 623006: () => { return parseInt(Module.canvas.style.width); },  
- 623054: () => { document.exitFullscreen(); },  
- 623081: () => { setTimeout(function(){ Module.requestFullscreen(false, false); }, 100); },  
- 623153: () => { if (document.fullscreenElement) return 1; },  
- 623199: () => { return Module.canvas.width; },  
- 623231: () => { return screen.width; },  
- 623256: () => { document.exitFullscreen(); },  
- 623283: ($0) => { const canvasId = UTF8ToString($0); setTimeout(function() { Module.requestFullscreen(false, true); setTimeout(function() { document.querySelector(canvasId).style.width="unset"; }, 100); }, 100); },  
- 623477: () => { return window.innerWidth; },  
- 623503: () => { return window.innerHeight; },  
- 623530: () => { if (document.fullscreenElement) return 1; },  
- 623576: () => { return Module.canvas.width; },  
- 623608: () => { return parseInt(Module.canvas.style.width); },  
- 623656: () => { if (document.fullscreenElement) return 1; },  
- 623702: () => { return Module.canvas.width; },  
- 623734: () => { return screen.width; },  
- 623759: () => { return window.innerWidth; },  
- 623785: () => { return window.innerHeight; },  
- 623812: () => { if (document.fullscreenElement) return 1; },  
- 623858: () => { return Module.canvas.width; },  
- 623890: () => { return screen.width; },  
- 623915: () => { document.exitFullscreen(); },  
- 623942: () => { if (document.fullscreenElement) return 1; },  
- 623988: () => { return Module.canvas.width; },  
- 624020: () => { return parseInt(Module.canvas.style.width); },  
- 624068: () => { document.exitFullscreen(); },  
- 624095: ($0) => { Module.canvas.style.opacity = $0; },  
- 624133: () => { return screen.width; },  
- 624158: () => { return screen.height; },  
- 624184: () => { return window.screenX; },  
- 624211: () => { return window.screenY; },  
- 624238: () => { return window.devicePixelRatio; },  
- 624274: ($0) => { navigator.clipboard.writeText(UTF8ToString($0)); },  
- 624327: ($0) => { Module.canvas.style.cursor = UTF8ToString($0); },  
- 624378: () => { Module.canvas.style.cursor = 'none'; },  
- 624415: ($0, $1, $2, $3) => { try { navigator.getGamepads()[$0].vibrationActuator.playEffect('dual-rumble', { startDelay: 0, duration: $3, weakMagnitude: $1, strongMagnitude: $2 }); } catch (e) { try { navigator.getGamepads()[$0].hapticActuators[0].pulse($2, $3); } catch (e) { } } },  
- 624671: ($0) => { Module.canvas.style.cursor = UTF8ToString($0); },  
- 624722: () => { if (document.pointerLockElement) return 1; },  
- 624769: () => { if (document.fullscreenElement) return 1; },  
- 624815: () => { return window.innerWidth; },  
- 624841: () => { return window.innerHeight; }
+  611792: () => { const n = Module.jankCollectEvery ?? 1; return Number.isInteger(n) && n >= 1 && n <= 60 ? n : 1; },  
+ 611893: ($0, $1, $2, $3, $4) => { Module.jankFrameStats = ({frames: Number($0), collections: Number($1), heap: Number($2), used: Number($3), memory: HEAPU8.buffer.byteLength, time: performance.now(), collectEvery: $4}); Module.onJankFrame?.(Module.jankFrameStats); },  
+ 612128: () => { if (document.fullscreenElement) return 1; },  
+ 612174: () => { return Module.canvas.width; },  
+ 612206: () => { return parseInt(Module.canvas.style.width); },  
+ 612254: () => { document.exitFullscreen(); },  
+ 612281: () => { setTimeout(function(){ Module.requestFullscreen(false, false); }, 100); },  
+ 612353: () => { if (document.fullscreenElement) return 1; },  
+ 612399: () => { return Module.canvas.width; },  
+ 612431: () => { return screen.width; },  
+ 612456: () => { document.exitFullscreen(); },  
+ 612483: ($0) => { const canvasId = UTF8ToString($0); setTimeout(function() { Module.requestFullscreen(false, true); setTimeout(function() { document.querySelector(canvasId).style.width="unset"; }, 100); }, 100); },  
+ 612677: () => { return window.innerWidth; },  
+ 612703: () => { return window.innerHeight; },  
+ 612730: () => { if (document.fullscreenElement) return 1; },  
+ 612776: () => { return Module.canvas.width; },  
+ 612808: () => { return parseInt(Module.canvas.style.width); },  
+ 612856: () => { if (document.fullscreenElement) return 1; },  
+ 612902: () => { return Module.canvas.width; },  
+ 612934: () => { return screen.width; },  
+ 612959: () => { return window.innerWidth; },  
+ 612985: () => { return window.innerHeight; },  
+ 613012: () => { if (document.fullscreenElement) return 1; },  
+ 613058: () => { return Module.canvas.width; },  
+ 613090: () => { return screen.width; },  
+ 613115: () => { document.exitFullscreen(); },  
+ 613142: () => { if (document.fullscreenElement) return 1; },  
+ 613188: () => { return Module.canvas.width; },  
+ 613220: () => { return parseInt(Module.canvas.style.width); },  
+ 613268: () => { document.exitFullscreen(); },  
+ 613295: ($0) => { Module.canvas.style.opacity = $0; },  
+ 613333: () => { return screen.width; },  
+ 613358: () => { return screen.height; },  
+ 613384: () => { return window.screenX; },  
+ 613411: () => { return window.screenY; },  
+ 613438: () => { return window.devicePixelRatio; },  
+ 613474: ($0) => { navigator.clipboard.writeText(UTF8ToString($0)); },  
+ 613527: ($0) => { Module.canvas.style.cursor = UTF8ToString($0); },  
+ 613578: () => { Module.canvas.style.cursor = 'none'; },  
+ 613615: ($0, $1, $2, $3) => { try { navigator.getGamepads()[$0].vibrationActuator.playEffect('dual-rumble', { startDelay: 0, duration: $3, weakMagnitude: $1, strongMagnitude: $2 }); } catch (e) { try { navigator.getGamepads()[$0].hapticActuators[0].pulse($2, $3); } catch (e) { } } },  
+ 613871: ($0) => { Module.canvas.style.cursor = UTF8ToString($0); },  
+ 613922: () => { if (document.pointerLockElement) return 1; },  
+ 613969: () => { if (document.fullscreenElement) return 1; },  
+ 614015: () => { return window.innerWidth; },  
+ 614041: () => { return window.innerHeight; }
 };
 function SetCanvasIdJs(out,outSize) { var canvasId = "#" + Module.canvas.id; stringToUTF8(canvasId, Number(out), outSize); }
 function __asyncjs__RequestClipboardData() { return Asyncify.handleAsync(async () => { if (navigator.clipboard && window.isSecureContext) { let items = await navigator.clipboard.read(); for (const item of items) { if (item.types.includes("text/plain")) { const blob = await item.getType("text/plain"); const text = await blob.text(); window._lastClipboardString = text; } else if (item.types.find(t => t.startsWith("image/"))) { const blob = await item.getType(item.types.find(t => t.startsWith("image/"))); const bitmap = await createImageBitmap(blob); const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height; const ctx = canvas.getContext('2d'); ctx.drawImage(bitmap, 0, 0); const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data; window._lastImgWidth = canvas.width; window._lastImgHeight = canvas.height; window._lastImgData = imgData; } } } else console.warn("Clipboard read() requires HTTPS/Localhost"); }); }
@@ -10458,6 +10460,8 @@ var wasmImports = {
   glDeleteProgram: _glDeleteProgram,
   /** @export */
   glDeleteShader: _glDeleteShader,
+  /** @export */
+  glDeleteTextures: _glDeleteTextures,
   /** @export */
   glDepthFunc: _glDepthFunc,
   /** @export */

@@ -16,7 +16,7 @@ function fail(reason) {
 }
 canvas.addEventListener('click', () => canvas.focus());
 canvas.addEventListener('keydown', event => {
-  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(event.code)) event.preventDefault();
+  if (event.code === 'Space') event.preventDefault();
 });
 window.addEventListener('error', event => fail(event.message));
 window.addEventListener('unhandledrejection', event => fail(event.reason));
@@ -31,7 +31,7 @@ var Module = {
   onExit: code => fail(`Game exited (${code}).`),
   onJankFrame: stats => {
     if (failed) return;
-    if (!ready && !['pacman: rules passed', 'pacman: initialized'].every(line => lines.includes(line))) {
+    if (!ready && !['flappy-bird: rules passed', 'flappy-bird: initialized'].every(line => lines.includes(line))) {
       fail('Missing game initialization markers.');
       return;
     }
@@ -45,7 +45,7 @@ if (typeof WebAssembly === 'undefined') {
   fail('WebAssembly is unavailable in this browser.');
 } else {
   const script = document.createElement('script');
-  script.src = `pacman.js${version}`;
-  script.onerror = () => fail('Could not load pacman.js. Serve all site files together over HTTP.');
+  script.src = `flappy-bird.js${version}`;
+  script.onerror = () => fail('Could not load flappy-bird.js. Serve all site files together over HTTP.');
   document.body.appendChild(script);
 }

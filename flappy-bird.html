@@ -1,0 +1,15 @@
+<!doctype html>
+<!-- AI-assisted isolated game runtime, embedded on the home page. -->
+<html lang="en" data-status="running">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flappy Bird · jank-wasm</title>
+<link rel="stylesheet" href="style.css?v=73bfb3b80802">
+<div class="game-box">
+  <canvas class="game-canvas" id="canvas" width="800" height="450" tabindex="0" aria-label="Flappy Bird game; click or hold Space to rise"></canvas>
+  <div class="game-message" id="game-message" role="status">Loading compiled jank game…</div>
+</div>
+<p class="game-status" id="status" role="status">Loading flappy-bird.wasm</p>
+<pre id="stdout" hidden></pre>
+<script src="flappy-bird-runner.js?v=73bfb3b80802"></script>
+</html>

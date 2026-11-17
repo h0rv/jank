@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jank-wasm</title>
-<link rel="stylesheet" href="style.css?v=4275e7e26c87">
+<link rel="stylesheet" href="style.css?v=73bfb3b80802">
 <header class="bar">
   <a class="name" href="index.html">jank-wasm</a>
   <nav><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md#one-command-native--wasm">Build</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Notes</a><a href="https://github.com/h0rv/jank-wasm">GitHub</a></nav>
@@ -13,19 +13,19 @@
   <h1>jank-wasm</h1>
   <p>A research fork of <a href="https://github.com/jank-lang/jank">jank</a> that compiles Clojure ahead of time to WebAssembly.</p>
 
-  <h2>Pac-Man</h2>
+  <h2>Flappy Bird</h2>
   <p>A raylib game compiled from the same jank source for native and wasm64.</p>
-  <p>Click, then arrow keys. Enter restarts after game over.</p>
-  <iframe class="game-frame" src="pacman.html?v=4275e7e26c87" title="Live Pac-Man game" loading="eager"></iframe>
+  <p>Click or press Space to start. Hold either to rise; release to fall. P pauses, Enter returns to the menu.</p>
+  <iframe class="game-frame" src="flappy-bird.html?v=73bfb3b80802" title="Live Flappy Bird game" loading="eager"></iframe>
   <noscript><p>The game needs JavaScript and a browser with memory64.</p></noscript>
   <p class="note">Needs memory64, Wasm exceptions and WebGL2. Tested in Chrome 156.</p>
-  <p>Adapted from <a href="https://github.com/b12n-oss/raylib-pacman">b12n-oss/raylib-pacman</a> (<a href="pacman-LICENSE">EPL-2.0</a>), after Michiel Borkent's original game. <a href="pacman-NOTICE.md">Notices</a> · <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/zig-wasm/examples/pacman">Example source</a>.</p>
+  <p>Adapted from <a href="https://github.com/jank-lang/jank/tree/main/example/gui/flappy-bird">jank's official flappy-bird example</a> (<a href="flappy-bird-LICENSE">MPL-2.0</a>). <a href="flappy-bird.jank">Modified source</a> · <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/zig-wasm/examples/flappy-bird">Build notes</a>.</p>
   <figure class="block">
-    <figcaption>src/raylib_pacman/pacman.jank</figcaption>
+    <figcaption>src/org/jank_lang/example/flappy_bird.jank</figcaption>
     <pre data-lang="clojure">(<a-k>defn</a-k> frame []
-  (<a-k>let</a-k> [s (<a-f>swap!</a-f> state step)]
+  (<a-k>let</a-k> [state (<a-f>step-frame</a-f> <a-o>@</a-o>global-state)]
     (<a-f>cpp/BeginDrawing</a-f>)
-    (<a-f>draw-state!</a-f> s)
+    (<a-f>reset!</a-f> global-state (<a-f>draw-frame!</a-f> state))
     (<a-f>cpp/EndDrawing</a-f>))
   <a-co>nil</a-co>)</pre>
   </figure>
@@ -84,5 +84,5 @@
   <p>Details and evidence are in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">experiment notes</a>.</p>
 </main>
 <footer>Research fork, kept out of upstream jank. Code and text written with AI assistance.</footer>
-<script src="runner.js?v=4275e7e26c87"></script>
+<script src="runner.js?v=73bfb3b80802"></script>
 </html>

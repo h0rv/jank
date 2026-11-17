@@ -1034,6 +1034,7 @@ if(jank_test)
     test/cpp/jank/util/fmt.cpp
     test/cpp/jank/util/path.cpp
     test/cpp/jank/util/sha256.cpp
+    test/cpp/jank/util/try.cpp
     test/cpp/jank/read/lex.cpp
     test/cpp/jank/read/parse.cpp
     test/cpp/jank/runtime/behavior/call.cpp

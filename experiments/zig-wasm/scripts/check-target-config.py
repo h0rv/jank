@@ -61,6 +61,24 @@ class TargetConfigTests(unittest.TestCase):
         )
         self.assertEqual(config["aot_flags"], "-L/target/one -L/target/two")
 
+    def test_host_paths_filtered_only_when_cross_compiling(self):
+        setup = '''
+set(LLVM_INCLUDE_DIRS /host/llvm/include)
+set(CLANG_INCLUDE_DIRS /host/clang/include)
+set(LLVM_LIBRARY_DIRS /host/libraries)
+set(llvm_dir /host/llvm)
+set(jank_resource_dir /host/resources)
+set(jank_common_compiler_flags -DJANK_RESOURCE_DIR="/host/resources" -DKEEP=1)
+set(jank_lib_includes -I/host/llvm/include -I /host/clang/include -I/target/include -I/host/llvm-target)
+set(jank_linker_flags -L/host/llvm/lib -L /host/libraries -L/target/lib)
+'''
+        cross = self.configure("echo wasm64-target", ["-Djank_cross_compile=ON"], setup)
+        self.assertEqual(cross["jit_flags"], "-DKEEP=1 -I/target/include -I/host/llvm-target")
+        self.assertEqual(cross["aot_flags"], "-L/target/lib")
+        native = self.configure("echo native-target", setup=setup)
+        self.assertIn("/host/llvm/include", native["jit_flags"])
+        self.assertIn("/host/libraries", native["aot_flags"])
+
 
 if __name__ == "__main__":
     (ROOT / "artifacts").mkdir(exist_ok=True)

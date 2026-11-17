@@ -1,16 +1,18 @@
 """AI-assisted cost probe. Run inside jank-host-build after ./jank-zig build."""
 import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import statistics
 import subprocess
 import sys
 
 
-def parse_sample(output: str, wasm: bool, disabled: bool) -> tuple[float, float | None]:
+def parse_sample(output: str, wasm: bool, disabled: bool) -> tuple[float, float | None, float]:
     for marker in ['jank -> Zig: scalar and wide result checks passed',
                    'jank -> Zig: borrowed-buffer checks passed']:
         if output.splitlines().count(marker) != 2:
@@ -22,18 +24,22 @@ def parse_sample(output: str, wasm: bool, disabled: bool) -> tuple[float, float 
     startup = re.search(r'^STARTUP ms=([\d.]+)$', output, re.M)
     if wasm and startup is None:
         raise ValueError('Missing startup record')
-    return float(timing[1]), float(startup[1]) if startup else None
+    first_entry = re.search(r'^FIRST_ENTRY ms=([\d.]+)$', output, re.M)
+    if first_entry is None:
+        raise ValueError('Missing first-entry record')
+    return float(timing[1]), float(startup[1]) if startup else None, float(first_entry[1])
 
 
 if sys.argv[1:] == ['--self-test']:
     fixture = ('jank -> Zig: scalar and wide result checks passed\n'
                'jank -> Zig: borrowed-buffer checks passed\n') * 2
     record = 'COST ns-per-call=123.0 collections-before=1 collections-after=1 gc-disabled=1\n'
-    valid = fixture + record + 'STARTUP ms=20.0\n'
-    assert parse_sample(valid, True, True) == (123.0, 20.0)
+    valid = fixture + record + 'STARTUP ms=20.0\nFIRST_ENTRY ms=100.0\n'
+    assert parse_sample(valid, True, True) == (123.0, 20.0, 100.0)
     for invalid in ['', fixture, valid.replace('passed', 'failed'),
                     valid.replace('gc-disabled=1', 'gc-disabled=0'),
-                    valid.replace('STARTUP ms=20.0\n', '')]:
+                    valid.replace('STARTUP ms=20.0\n', ''),
+                    valid.replace('FIRST_ENTRY ms=100.0\n', '')]:
         try:
             parse_sample(invalid, True, True)
         except ValueError:
@@ -88,7 +94,7 @@ for target, build in [('native', 'build-target'), ('wasm', 'build-wasm64')]:
         (ROOT / 'wasm-probe/spill-cost.cpp', 'driver', []),
     ]:
         obj = OUT / f'{target}-{label}.o'
-        run([*compile_flags, '-O2', '-g0', *extra, '-c', source, '-o', obj])
+        run([*compile_flags, '-O2', '-g', *extra, '-c', source, '-o', obj])
         objects.append(obj)
     zig = OUT / f'{target}-zig.o'
     run([ZIG, 'build-obj', APP / 'native.zig', '-O', 'ReleaseSafe',
@@ -98,26 +104,25 @@ for target, build in [('native', 'build-target'), ('wasm', 'build-wasm64')]:
         run(['g++-14', *objects, zig, build_dir / 'libjank-static-runtime.a',
              '-pthread', '-ldl', '-o', OUT / 'native'])
     else:
-        run([compile_flags[0], '-O2', '-g0', '--profiling-funcs', '-sMEMORY64=1', '-fwasm-exceptions',
-             '-sALLOW_MEMORY_GROWTH=1', '-sEXIT_RUNTIME=1', '-sSTACK_SIZE=16777216',
+        run([compile_flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1', '-fwasm-exceptions',
+             '-sALLOW_MEMORY_GROWTH=1', '-sEXIT_RUNTIME=1', '-sSTACK_SIZE=4194304',
              '--pre-js', ROOT / 'wasm-probe/spill-cost-pre.js',
-             *objects, zig, build_dir / 'libjank-static-runtime.a', '-o', OUT / 'base.js'])
+             *objects, zig, build_dir / 'libjank-static-runtime.a',
+             '-Wl,--error-limit=0', '-o', OUT / 'base.js'])
 
 features = ['--enable-memory64', '--enable-exception-handling', '--enable-bulk-memory',
             '--enable-mutable-globals', '--enable-nontrapping-float-to-int', '--enable-sign-ext',
             '--enable-reference-types', '--enable-multivalue']
 optimizer = ROOT / 'artifacts/build-binaryen/bin/wasm-opt'
+patch_digest = hashlib.sha256((ROOT / 'wasm-probe/binaryen-memory64-stack.patch').read_bytes()).hexdigest()
+if (optimizer.parent / 'jank-memory64-patch.sha256').read_text() != patch_digest:
+    sys.exit('Binaryen patch stamp is stale; refresh it with ./jank-zig build first')
 for variant in ['plain', 'spill']:
-    # Optimize the common input first; never optimize away the inserted spills.
-    run([optimizer, OUT / 'base.wasm', *features, '-O2', '-g',
-         '-o', OUT / f'{variant}.wasm'])
+    shutil.copyfile(OUT / 'base.wasm', OUT / f'{variant}.wasm')
     if variant == 'spill':
-        run([optimizer, OUT / 'spill.wasm', *features, '--flatten', '--spill-pointers',
-             '-o', OUT / 'transformed.wasm'])
-        (OUT / 'transformed.wasm').replace(OUT / 'spill.wasm')
+        run([sys.executable, ROOT / 'wasm-probe/spill-pointers.py', ROOT, OUT / 'spill.wasm'])
     run([optimizer, OUT / f'{variant}.wasm', *features, '--strip-debug',
-         '-o', OUT / 'stripped.wasm'])
-    (OUT / 'stripped.wasm').replace(OUT / f'{variant}.wasm')
+         '-o', OUT / f'{variant}.stripped.wasm'])
     (OUT / f'{variant}.js').write_text((OUT / 'base.js').read_text().replace('base.wasm', f'{variant}.wasm'))
 
 rows = []
@@ -125,6 +130,7 @@ for variant, mode in [('native', 'continuous'), ('plain', 'no-gc'),
                       ('spill', 'no-gc'), ('spill', 'continuous')]:
     samples = []
     startups = []
+    first_entries = []
     binary = OUT / ('native' if variant == 'native' else f'{variant}.wasm')
     for sample in range(7):
         args = [binary, mode] if variant == 'native' else [NODE, OUT / f'{variant}.js', mode]
@@ -132,13 +138,17 @@ for variant, mode in [('native', 'continuous'), ('plain', 'no-gc'),
         output = result.stdout + result.stderr
         (OUT / f'{variant}-{mode}-{sample}.log').write_text(output)
         result.check_returncode()
-        timing, startup = parse_sample(output, variant != 'native', mode == 'no-gc')
+        timing, startup, first_entry = parse_sample(output, variant != 'native', mode == 'no-gc')
         samples.append(timing)
+        first_entries.append(first_entry)
         if startup is not None:
             startups.append(startup)
     row = dict(variant=variant, mode=mode, bytes=binary.stat().st_size,
                gzip_bytes=len(gzip.compress(binary.read_bytes(), mtime=0)),
+               stripped_bytes=(OUT / f'{variant}.stripped.wasm').stat().st_size
+               if variant != 'native' else None,
                startup_ms=statistics.median(startups) if startups else None,
+               first_entry_ms=statistics.median(first_entries), samples_first_entry_ms=first_entries,
                ns_per_call=statistics.median(samples), samples_ns=samples,
                samples_startup_ms=startups, correctness='PASS')
     rows.append(row)

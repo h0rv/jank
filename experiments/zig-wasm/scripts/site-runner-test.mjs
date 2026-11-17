@@ -6,7 +6,7 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../site/runner.js', import.meta.url), 'utf8');
 const gameSource = readFileSync(new URL('../site/flappy-bird-runner.js', import.meta.url), 'utf8');
-function runner({ wasm = true, currentScript } = {}) {
+function runner({ wasm = true, currentScript, deferred = false } = {}) {
   const elements = Object.fromEntries(['run-form', 'input', 'run', 'result', 'status', 'stats', 'stdout'].map(id =>
     [id, { textContent: '', value: ' 100 ', disabled: true, scrollTop: 0, scrollHeight: 0,
       addEventListener(name, callback) { this[`on${name}`] = callback; } }]));
@@ -20,14 +20,52 @@ function runner({ wasm = true, currentScript } = {}) {
     body: { appendChild: script => scripts.push(script) }
   };
   const created = [];
+  const observers = [];
   const context = vm.createContext({ document, URL, performance: { now: () => 0 },
+    IntersectionObserver: deferred ? class {
+      constructor(callback, options) { this.callback = callback; this.options = options; observers.push(this); }
+      observe(element) { this.element = element; }
+      disconnect() { this.disconnected = true; }
+    } : undefined,
     WebAssembly: wasm ? {} : undefined,
     createLive: options => { const instance = {}; created.push({ options, instance });
       return Promise.resolve(instance); },
     window: { addEventListener: (name, callback) => { listeners[name] = callback; } } });
   vm.runInContext(source, context);
-  return { document, elements, listeners, scripts, created };
+  return { document, elements, listeners, scripts, created, observers };
 }
+
+test('offscreen prime module waits for visibility, then loads only once', async () => {
+  const page = runner({ deferred: true, currentScript: { src: 'https://example.test/runner.js?v=abc123' } });
+  const observer = page.observers[0];
+  assert.equal(observer.element, page.elements['run-form']);
+  assert.equal(observer.options.rootMargin, '200px');
+  assert.equal(page.scripts.length, 0);
+  assert.equal(page.elements.status.textContent, 'waiting until visible');
+  observer.callback([]);
+  observer.callback([{ isIntersecting: false }]);
+  assert.equal(page.scripts.length, 0);
+  observer.callback([{ isIntersecting: true }]);
+  observer.callback([{ isIntersecting: true }]);
+  assert.equal(page.scripts.length, 1);
+  assert.equal(page.scripts[0].src, 'live.js?v=abc123');
+  assert.equal(observer.disconnected, true);
+  page.scripts[0].onload();
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(page.created[0].instance.liveInput, '100');
+});
+
+test('submit can load an offscreen module and deferred load errors stay visible', () => {
+  const page = runner({ deferred: true });
+  let prevented = false;
+  page.elements['run-form'].onsubmit({ preventDefault() { prevented = true; } });
+  assert.equal(prevented, true);
+  assert.equal(page.scripts.length, 1);
+  assert.equal(page.observers[0].disconnected, true);
+  page.scripts[0].onerror();
+  assert.equal(page.document.documentElement.dataset.status, 'fail');
+  assert.match(page.elements.stdout.textContent, /Could not load live.js/);
+});
 
 test('starts a run on load, streams lines and reruns on submit', async () => {
   const page = runner();

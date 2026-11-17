@@ -11,6 +11,8 @@ const diagnostics = document.getElementById('stdout');
 let module = null;
 let startedAt = 0;
 let shownAt = -Infinity;
+let loading = false;
+let observer = null;
 
 function finish(state, message) {
   document.documentElement.dataset.status = state;
@@ -58,11 +60,11 @@ const options = {
   }
 };
 
-form.addEventListener('submit', event => { event.preventDefault(); start(); });
-
-if (typeof WebAssembly === 'undefined') {
-  fail('WebAssembly is unavailable in this browser.');
-} else {
+function load() {
+  if (loading || typeof WebAssembly === 'undefined') return;
+  loading = true;
+  observer?.disconnect();
+  status.textContent = 'loading';
   const script = document.createElement('script');
   script.src = `live.js${version}`;
   script.onerror = () => fail('Could not load live.js. Serve all site files together over HTTP.');
@@ -72,4 +74,22 @@ if (typeof WebAssembly === 'undefined') {
     start();
   }, fail);
   document.body.appendChild(script);
+}
+
+form.addEventListener('submit', event => {
+  event.preventDefault();
+  if (module) start();
+  else load();
+});
+
+if (typeof WebAssembly === 'undefined') {
+  fail('WebAssembly is unavailable in this browser.');
+} else if (typeof IntersectionObserver === 'function') {
+  status.textContent = 'waiting until visible';
+  observer = new IntersectionObserver(entries => {
+    if (entries.some(entry => entry.isIntersecting)) load();
+  }, { rootMargin: '200px' });
+  observer.observe(form);
+} else {
+  load();
 }

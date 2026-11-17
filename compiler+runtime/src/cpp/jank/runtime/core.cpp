@@ -1180,6 +1180,10 @@ namespace jank::runtime
 
   void cancel_future(obj::future_ref const future)
   {
+#ifndef GC_THREADS
+    static_cast<void>(future);
+    throw std::runtime_error{ "Futures require a thread-enabled runtime" };
+#else
     /* We need to hold this lock the whole time we're checking, to ensure the thread
      * doesn't finish while we're here checking. */
     auto const locked_state{ future->state.rlock() };
@@ -1189,10 +1193,15 @@ namespace jank::runtime
       auto const thread_handle{ locked_thread->native_handle() };
       pthread_cancel(reinterpret_cast<pthread_t>(thread_handle));
     }
+#endif
   }
 
   bool is_future_cancelled(obj::future_ref const future)
   {
+#ifndef GC_THREADS
+    static_cast<void>(future);
+    throw std::runtime_error{ "Futures require a thread-enabled runtime" };
+#else
     /* We need to hold this lock the whole time we're checking, to ensure the thread
      * doesn't finish while we're here checking. */
     /* NOLINTNEXTLINE(misc-const-correctness): Upgrading requires non-const. */
@@ -1254,6 +1263,7 @@ namespace jank::runtime
       write_locked_state->status = obj::future_status::done;
       return false;
     }
+#endif
 #endif
   }
 

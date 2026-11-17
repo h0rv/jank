@@ -108,6 +108,7 @@ test('missing WebAssembly and load errors give visible diagnostics', () => {
   assert.equal(missing.scripts.length, 0);
   assert.match(missing.elements.stdout.textContent, /WebAssembly is unavailable/);
   assert.equal(missing.document.documentElement.dataset.status, 'fail');
+  assert.match(missing.elements.status.textContent, /requires memory64 and Wasm exceptions/);
   const page = runner();
   page.scripts[0].onerror();
   assert.match(page.elements.stdout.textContent, /Could not load live.js/);
@@ -120,6 +121,7 @@ test('abort, runtime errors and rejected promises fail visibly', () => {
     const page = runner();
     trigger(page);
     assert.equal(page.document.documentElement.dataset.status, 'fail');
+    assert.match(page.elements.status.textContent, /requires memory64 and Wasm exceptions/);
     assert.notEqual(page.elements.stdout.textContent, '');
   }
 });

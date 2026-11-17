@@ -2,6 +2,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <typeinfo>
 #include <jank/c_api.h>
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/obj/persistent_hash_map.hpp>
@@ -10,7 +11,26 @@
 #include <gc/gc_mark.h>
 
 #ifdef __EMSCRIPTEN__
+#include <emscripten/stack.h>
 extern "C" char __global_base, __data_end;
+#endif
+
+#ifdef GC_ROOTS_EXCEPTION_STORAGE
+#ifdef __EMSCRIPTEN__
+using exception_destructor = void *(*)(void *);
+#else
+using exception_destructor = void (*)(void *);
+#endif
+extern "C" [[noreturn]] void __real___cxa_throw(void *, std::type_info *, exception_destructor);
+extern "C" [[noreturn]] void __wrap___cxa_throw(void *storage, std::type_info *type,
+                                               exception_destructor destructor)
+{
+  if(*type == typeid(jank::runtime::object_ref))
+  {
+    GC_add_roots(storage, static_cast<char *>(storage) + sizeof(jank::runtime::object_ref));
+  }
+  __real___cxa_throw(storage, type, destructor);
+}
 #endif
 
 namespace
@@ -167,6 +187,167 @@ namespace
     return check(begin, end, value);
   }
 
+  [[gnu::noinline]] object_ref operand_value()
+  {
+    object_ref const value{ fixture() };
+#ifdef GC_ROOTS_SHADOW
+    slots[depth++] = value;
+#endif
+    return value;
+  }
+
+  [[gnu::noinline]] size_t collecting_argument()
+  {
+    churn();
+    return GC_get_gc_no();
+  }
+
+  [[gnu::noinline]] bool consume_operand(object_ref const value, size_t const token, size_t const begin)
+  {
+    bool const ok{ token > 0 && check(begin, used, value) };
+#ifdef GC_ROOTS_SHADOW
+    slots[--depth] = object_ref{ _jank_null{} };
+#endif
+    return ok;
+  }
+
+  [[gnu::noinline]] bool operand()
+  {
+    size_t const begin{ used };
+    return consume_operand(operand_value(), collecting_argument(), begin);
+  }
+
+  size_t unwind_collections;
+  size_t unwind_watch_begin;
+  bool unwind_retained;
+  bool collect_on_unwind{ true };
+
+  struct collecting_destructor
+  {
+    ~collecting_destructor()
+    {
+      if(collect_on_unwind)
+      {
+        auto const before{ GC_get_gc_no() };
+        churn();
+        unwind_collections += GC_get_gc_no() - before;
+        unwind_retained &= live(unwind_watch_begin, used);
+      }
+    }
+  };
+
+  [[gnu::noinline]] void unwind_frames(int const level, bool const payload)
+  {
+    collecting_destructor guard;
+    if(level) { unwind_frames(level - 1, payload); }
+    else if(payload) { jank_throw(fixture().raw()); }
+    else { throw 42; }
+  }
+
+  struct exception_storage_guard
+  {
+    object_ref const *slot;
+    ~exception_storage_guard()
+    {
+#ifdef GC_ROOTS_EXCEPTION_STORAGE
+      GC_remove_roots(const_cast<object_ref *>(slot), const_cast<object_ref *>(slot + 1));
+#endif
+    }
+  };
+
+  [[gnu::noinline]] bool exception_local()
+  {
+    size_t const begin{ used };
+    object_ref const value{ fixture() };
+    size_t const end{ used };
+    shadow guard{ value };
+    unwind_collections = 0;
+    unwind_watch_begin = begin;
+    unwind_retained = true;
+    try { unwind_frames(3, false); }
+    catch(int const token)
+    {
+      churn();
+      bool const ok{ token == 42 && unwind_collections >= 4 && unwind_retained && check(begin, end, value) };
+      std::printf("EXCEPTION local: unwind-collections=%zu retained-during-unwind=%d\n",
+                  unwind_collections, unwind_retained);
+      return ok;
+    }
+    return false;
+  }
+
+  [[gnu::noinline]] bool exception_payload()
+  {
+    size_t const begin{ used };
+    unwind_collections = 0;
+    unwind_watch_begin = begin;
+    unwind_retained = true;
+    try { unwind_frames(3, true); }
+    catch(object_ref const &value)
+    {
+      exception_storage_guard guard{ &value };
+      churn();
+      bool const ok{ unwind_collections >= 4 && unwind_retained && check(begin, used, value) };
+      std::printf("EXCEPTION payload: unwind-collections=%zu retained-during-unwind=%d storage-roots=%d\n",
+                  unwind_collections, unwind_retained,
+#ifdef GC_ROOTS_EXCEPTION_STORAGE
+                  1
+#else
+                  0
+#endif
+      );
+      return ok;
+    }
+    return false;
+  }
+
+  [[gnu::noinline]] uintptr_t stack_pointer()
+  {
+#ifdef __EMSCRIPTEN__
+    return emscripten_stack_get_current();
+#else
+    return reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
+#endif
+  }
+
+  [[gnu::noinline]] bool exception_stack()
+  {
+    size_t const begin{ used };
+    object_ref const value{ fixture() };
+    size_t const end{ used };
+    shadow guard{ value };
+    auto const before{ stack_pointer() };
+    unwind_collections = 0;
+    unwind_watch_begin = begin;
+    unwind_retained = true;
+    for(int i{}; i < 10000; ++i)
+    {
+      collect_on_unwind = i % 1000 == 0;
+      try { unwind_frames(2, false); }
+      catch(int const token)
+      {
+        if(token != 42) { return false; }
+        if(collect_on_unwind) { churn(); }
+      }
+      auto const after{ stack_pointer() };
+      if(after != before || !live(begin, end) || !unwind_retained)
+      {
+        collect_on_unwind = true;
+        std::printf("EXCEPTION stack: iterations=%d before=%zu after=%zu retained=%d\n",
+                    i + 1, before, after, live(begin, end));
+        return false;
+      }
+    }
+    collect_on_unwind = true;
+    bool const retained{ check(begin, end, value) };
+    bool const recovery{ locals() && nested(3)
+                         && [] { size_t const begin{ used }; return temporary(fixture(), begin); }()
+                         && operand() };
+    std::printf("EXCEPTION stack: iterations=10000 before=%zu after=%zu unwind-collections=%zu recovery=%d\n",
+                before, stack_pointer(), unwind_collections, recovery);
+    return retained && recovery && unwind_collections >= 30;
+  }
+
   [[gnu::noinline]] bool globals(bool const register_slot)
   {
     size_t const begin{ used };
@@ -267,6 +448,8 @@ int main(int argc, char **argv)
   struct test { char const *name; bool (*run)(); };
   test const tests[]{ { "locals", locals }, { "nested", [] { return nested(31); } },
                       { "temporary", [] { size_t const begin{ used }; return temporary(fixture(), begin); } },
+                      { "operand", operand }, { "exception-local", exception_local },
+                      { "exception-payload", exception_payload }, { "exception-stack", exception_stack },
                       { "runtime-internal", runtime_internal },
                       { "registered-global", [] { return globals(true); } },
                       { "unregistered-global", [] { return globals(false); } },

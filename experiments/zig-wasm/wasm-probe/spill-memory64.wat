@@ -3,6 +3,8 @@
   (import "env" "collect" (func $collect (result i32)))
   (memory (export "memory") i64 1)
   (global $__stack_pointer (export "sp") (mut i64) (i64.const 4096))
+  (global $drift (export "drift") (mut i64) (i64.const 0))
+  (tag $failure)
   (type $collector (func (result i32)))
   (table 1 funcref)
   (elem (i32.const 0) $collect)
@@ -21,4 +23,24 @@
   (func $consume (param i64 i32) (result i64) (local.get 0))
   (func (export "operand") (param $value i64) (result i64)
     (call $consume (local.get $value) (call $collect)))
+  (func $throwing (param $value i64)
+    (drop (call $collect))
+    (drop (local.get $value))
+    (throw $failure))
+  (func (export "unwind") (param $value i64) (result i64)
+    (local $before i64)
+    (local $iteration i32)
+    (local.set $before (global.get $__stack_pointer))
+    (loop $again
+      (try
+        (do (call $throwing (local.get $value)))
+        (catch $failure
+          (drop (call $collect))
+          (global.set $drift
+            (i64.sub (global.get $__stack_pointer) (local.get $before)))))
+      (br_if $again
+        (i32.lt_u
+          (local.tee $iteration (i32.add (local.get $iteration) (i32.const 1)))
+          (i32.const 10000))))
+    (local.get $value))
 )

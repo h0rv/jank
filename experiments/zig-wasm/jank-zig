@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+# AI-assisted research entry point; no global tool installation.
+set -euo pipefail
+exec python3 "$(dirname "$(realpath "$0")")/scripts/jank-zig.py" "$@"

@@ -272,6 +272,7 @@
     clojure.string-test.starts-with-qmark
     clojure.string-test.upper-case
     jank-test.string-join
+    jank-test.native-vector-sequence
   ])
 
 (def windows? (= cpp/jtl.current_platform cpp/jtl.platform.windows_like))

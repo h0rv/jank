@@ -6,52 +6,55 @@ namespace jank::runtime::obj
 {
   native_vector_sequence::native_vector_sequence()
     : object{ obj_type, obj_behaviors }
+    , data{ make_box<native_vector<object_ref>>() }
   {
   }
 
   native_vector_sequence::native_vector_sequence(native_vector<object_ref> const &data, usize index)
-    : object{ obj_type, obj_behaviors }
-    , data{ data }
-    , index{ index }
+    : native_vector_sequence{ make_box<native_vector<object_ref>>(data), index }
   {
-    jank_debug_assert(!this->data.empty());
   }
 
   native_vector_sequence::native_vector_sequence(native_vector<object_ref> &&data)
-    : object{ obj_type, obj_behaviors }
-    , data{ jtl::move(data) }
+    : native_vector_sequence{ jtl::move(data), 0 }
   {
-    jank_debug_assert(!this->data.empty());
   }
 
   native_vector_sequence::native_vector_sequence(native_vector<object_ref> &&data, usize index)
-    : object{ obj_type, obj_behaviors }
-    , data{ jtl::move(data) }
-    , index{ index }
+    : native_vector_sequence{ make_box<native_vector<object_ref>>(jtl::move(data)), index }
   {
-    jank_debug_assert(!this->data.empty());
   }
 
   native_vector_sequence::native_vector_sequence(object_ref const meta,
                                                  native_vector<object_ref> &&data)
     : object{ obj_type, obj_behaviors }
-    , data{ jtl::move(data) }
+    , data{ make_box<native_vector<object_ref>>(jtl::move(data)) }
     , meta{ meta }
   {
+  }
+
+  native_vector_sequence::native_vector_sequence(jtl::ref<native_vector<object_ref> const> data,
+                                                 usize const index)
+    : object{ obj_type, obj_behaviors }
+    , data{ data }
+    , index{ index }
+  {
+    jank_debug_assert(index <= data->size());
   }
 
   /* behavior::object_like */
   bool native_vector_sequence::equal(object const &o) const
   {
-    return runtime::equal(o,
-                          data.begin() + static_cast<decltype(data)::difference_type>(index),
-                          data.end());
+    return runtime::equal(
+      o,
+      data->begin() + static_cast<native_vector<object_ref>::difference_type>(index),
+      data->end());
   }
 
   void native_vector_sequence::to_string(jtl::string_builder &buff) const
   {
-    runtime::to_string(data.begin() + static_cast<decltype(data)::difference_type>(index),
-                       data.end(),
+    runtime::to_string(data->begin() + static_cast<native_vector<object_ref>::difference_type>(index),
+                       data->end(),
                        "(",
                        ')',
                        buff);
@@ -60,8 +63,8 @@ namespace jank::runtime::obj
   jtl::immutable_string native_vector_sequence::to_string() const
   {
     jtl::string_builder buff;
-    runtime::to_string(data.begin() + static_cast<decltype(data)::difference_type>(index),
-                       data.end(),
+    runtime::to_string(data->begin() + static_cast<native_vector<object_ref>::difference_type>(index),
+                       data->end(),
                        "(",
                        ')',
                        buff);
@@ -71,63 +74,63 @@ namespace jank::runtime::obj
   jtl::immutable_string native_vector_sequence::to_code_string() const
   {
     jtl::string_builder buff;
-    runtime::to_code_string(data.begin() + static_cast<decltype(data)::difference_type>(index),
-                            data.end(),
-                            "(",
-                            ')',
-                            buff);
+    runtime::to_code_string(
+      data->begin() + static_cast<native_vector<object_ref>::difference_type>(index),
+      data->end(),
+      "(",
+      ')',
+      buff);
     return buff.release();
   }
 
   uhash native_vector_sequence::to_hash() const
   {
-    return hash::ordered(data.begin() + static_cast<decltype(data)::difference_type>(index),
-                         data.end());
+    return hash::ordered(data->begin() + static_cast<native_vector<object_ref>::difference_type>(index),
+                         data->end());
   }
 
   /* behavior::seqable */
   object_ref native_vector_sequence::seq() const
   {
-    return data.empty() ? native_vector_sequence_ref{} : runtime::detail::untagged(this);
+    return count() == 0 ? native_vector_sequence_ref{} : runtime::detail::untagged(this);
   }
 
   object_ref native_vector_sequence::fresh_seq() const
   {
-    return data.empty() ? native_vector_sequence_ref{}
+    return count() == 0 ? native_vector_sequence_ref{}
                         : make_box<native_vector_sequence>(data, index);
   }
 
   /* behavior::countable */
   usize native_vector_sequence::count() const
   {
-    return data.size() - index;
+    return data->size() - index;
   }
 
   /* behavior::sequence */
   object_ref native_vector_sequence::first() const
   {
-    jank_debug_assert(index < data.size());
-    return data[index];
+    return count() == 0 ? object_ref{} : (*data)[index];
   }
 
   object_ref native_vector_sequence::next() const
   {
-    auto n(index);
-    ++n;
-
-    if(n == data.size())
+    if(count() <= 1)
     {
       return {};
     }
 
-    return make_box<native_vector_sequence>(data, n);
+    return make_box<native_vector_sequence>(data, index + 1);
   }
 
   object_ref native_vector_sequence::next_in_place()
   {
-    ++index;
+    if(index < data->size())
+    {
+      ++index;
+    }
 
-    if(index == data.size())
+    if(index == data->size())
     {
       return {};
     }
@@ -137,13 +140,13 @@ namespace jank::runtime::obj
 
   cons_ref native_vector_sequence::conj(object_ref const head)
   {
-    return make_box<cons>(head, data.empty() ? object_ref{} : runtime::detail::untagged(this));
+    return make_box<cons>(head, seq());
   }
 
   native_vector_sequence_ref native_vector_sequence::with_meta(object_ref const m) const
   {
     auto const meta(behavior::detail::validate_meta(m));
-    auto ret(expect_object<obj::native_vector_sequence>(fresh_seq()));
+    auto ret(make_box<native_vector_sequence>(data, index));
     ret->meta = meta;
     return ret;
   }

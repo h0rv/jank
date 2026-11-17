@@ -1,7 +1,0 @@
-{
-  "name": "pacman",
-  "main": "raylib-pacman.pacman",
-  "libraries": ["raylib"],
-  "frame": "raylib-pacman.pacman/frame",
-  "expect": ["pacman: rules passed", "pacman: initialized"]
-}

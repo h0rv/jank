@@ -21,9 +21,15 @@ namespace jtl
   using f32 = float;
   using f64 = double;
 
+#if __SIZEOF_POINTER__ == 8
   using uptr = unsigned long long;
   using usize = uptr;
   using ssize = long long;
+#else
+  using uptr = __UINTPTR_TYPE__;
+  using usize = __SIZE_TYPE__;
+  using ssize = __PTRDIFF_TYPE__;
+#endif
   using uhash = u32;
   using nullptr_t = decltype(nullptr);
 

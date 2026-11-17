@@ -37,7 +37,11 @@ extern "C"
   typedef double jank_f64;
 
   /* NOLINTNEXTLINE(modernize-use-using) */
+#if __SIZEOF_POINTER__ == 8
   typedef unsigned long long jank_uptr;
+#else
+  typedef __UINTPTR_TYPE__ jank_uptr;
+#endif
   /* NOLINTNEXTLINE(modernize-use-using) */
   typedef jank_uptr jank_usize;
   /* NOLINTNEXTLINE(modernize-use-using) */

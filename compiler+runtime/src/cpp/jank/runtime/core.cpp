@@ -24,6 +24,18 @@
 
 namespace jank::runtime
 {
+#if !JANK_NAN_BOXING
+  object *detail::box_number(i32 const val)
+  {
+    return make_box<obj::integer>(static_cast<i64>(val)).ptr();
+  }
+
+  object *detail::box_number(f64 const val)
+  {
+    return make_box<obj::real>(val).ptr();
+  }
+#endif
+
   bool not_(object_ref const o)
   {
     if(runtime::is_nil(o))

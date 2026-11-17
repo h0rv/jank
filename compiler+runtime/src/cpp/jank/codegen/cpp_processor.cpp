@@ -171,7 +171,7 @@ namespace jank::codegen
       }
       else if(is_typed_object(type))
       {
-        if(runtime::detail::is_tagged_pointer(ptr))
+        if(!JANK_NAN_BOXING || runtime::detail::is_tagged_pointer(ptr))
         {
           fmt_str = util::format("{}{ _jank_codegen{ }, (void*){} }",
                                  get_qualified_type_name(type),

@@ -1945,6 +1945,79 @@ calls, suspension/callbacks, high addresses, stack-overflow handling, all
 runtime code paths, or production exception ownership. Weak links guard the
 observed objects, not every internal vector/map node or backing allocation.
 
+### wasm32 raw-reference runtime and GC-enabled Zig spike
+
+This AI-assisted follow-up preserves the 64-bit aliases and NaN encoding.
+On 32-bit targets, `uptr`, `usize` and `ssize` use the compiler's pointer/size/
+difference types; `JANK_NAN_BOXING` is false. An erased `object_ref` contains a
+raw pointer, never a truncated NaN tag. Erasing a small numeric ref allocates
+an ordinary `obj::integer` or `obj::real` through the existing GC allocator.
+The small typed numeric refs remain value adapters; no numeric bits are stored
+in a 32-bit pointer. The collector pointer mask is applied only on 64-bit builds.
+The C ABI and generated launcher size aliases also follow the target width.
+
+**Source inspection:** the shared tag/untag helpers cover `make_box`, numeric
+conversion, truthiness, visitation and math without duplicating those paths.
+Generated `_jank_small_int`/`_jank_small_real` literals use the same typed adapters
+and allocate when erased. The compiler's eval-only typed-pointer literal path
+also accepts raw pointers. Reader offset literals now have `usize` type; file
+mapping checks that its size fits before converting to `usize`.
+
+Reproduction uses the documented fresh `ubuntu:24.04` `jank-host-build`
+container, pinned LLVM 23.1.6, Emscripten 7.0.0, Zig 0.17.1 and Node 26.13.1.
+No global tools or submodule pins changed. From this directory, after the
+one-command wrapper's prerequisite bootstrap:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh host
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh spike
+for step in deps configure build spike; do
+  docker exec --user 1000:1000 -e WASM_BITS=32 jank-host-build \
+    bash scripts/build-wasm64-target.sh "$step"
+done
+# Ordinary spike startup above lacks roots and does not pass the marker gate.
+docker exec --user 1000:1000 -e WASM_BITS=32 \
+  -e SPILL_WASM_OPT="$PWD/.tools/gc-wasm/emsdk/upstream/bin/wasm-opt" \
+  jank-host-build bash scripts/build-wasm64-target.sh startup-spill
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh build
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh startup-spill
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+```
+
+**Compile/archive/link:** wasm32 dependencies/configuration succeeded, followed
+by the complete runtime/core archive and the generated launcher/module plus
+unchanged Zig object. The runtime smoke passes numeric equality/hash/conversion,
+nil and conversion-error checks, exception dispatch and capability errors.
+Native tests report **130/130 cases, 2053/2053 assertions, 0 failures**, including
+one new case with 22 assertions (the requested historical baseline was 129/2029;
+this checkout already had 129/2031). All 870 jank files have 9 skips, 0 failures.
+
+**Execution:** ordinary wasm32 startup still reports `The \`reader_opts\` argument
+must be a map, not a \`persistent_vector\`.` and fails the marker gate. With
+`__global_base..__data_end` registered, a 4 MiB diagnostic stack and
+`--flatten --spill-pointers`, both widths pass 20 continuous-GC entries:
+
+```text
+jank -> Zig: scalar and wide result checks passed
+jank -> Zig: borrowed-buffer checks passed
+STARTUP VERDICT: mode=continuous PASS iterations=20 passed=20 failed=0 exit=0
+STARTUP SPILL VERDICT: PASS
+```
+
+GC stays enabled (`gc-disabled=0`); collections advance 1→12 for wasm32 and
+1→15 for wasm64 during startup. Wasm32 uses **stock Binaryen 133
+`version_133-159-ga9141c8cc`**, not the private patch: its i32 stack arithmetic
+works for this spike. Wasm64 still uses the private memory64/EH-cleanup build.
+The patch's zeroing/EH changes also apply to i32 by inspection, but are not
+needed to reach these wasm32 markers; wasm32 exception-lifetime/reclamation
+coverage was not established. Logs are `artifacts/logs/wasm{32,64}-*`; binaries
+are under `artifacts/wasm{32,64}-spike`. The `jank-zig` wrapper still defaults
+to wasm64; width selection here is through the lower-level helper.
+
+**Correctness scope:** these finite numeric and spike assertions do not prove
+general GC rooting, exception-storage ownership, browser portability or full
+Wasm support. The earlier exception-root caveats remain, including natively.
+
 ## WASI
 
 This AI-assisted Linux x86_64 experiment uses **Emscripten compiler + WASI ABI

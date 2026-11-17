@@ -9,6 +9,7 @@
 #include <unistd.h>
 
 #include <filesystem>
+#include <limits>
 
 #include <jank/type.hpp>
 #include <jank/runtime/core.hpp>
@@ -200,6 +201,11 @@ namespace jank::runtime::module
       file_view{ path, HANDLES(hFile, hMapping), head, static_cast<size_t>(fileSize.QuadPart) });
 #else
     auto const file_size(std::filesystem::file_size(path.c_str()));
+    if(file_size > std::numeric_limits<usize>::max())
+    {
+      return error::runtime_unable_to_open_file(
+        util::format("The file `{}` is too large to map into memory.", path));
+    }
     /* NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) */
     auto const fd(::open(path.c_str(), O_RDONLY));
     if(fd < 0)
@@ -221,7 +227,7 @@ namespace jank::runtime::module
         util::format("The file `{}` could not be mapped into memory.", path));
     }
 
-    return ok(file_view{ path, fd, head, file_size });
+    return ok(file_view{ path, fd, head, static_cast<usize>(file_size) });
 #endif
   }
 

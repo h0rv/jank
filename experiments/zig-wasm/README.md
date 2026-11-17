@@ -32,6 +32,7 @@ The original baseline uses an installed jank compiler for host code generation a
 | Is the `reader_opts` startup error wasm64-specific? | Startup diagnostics trace wasm64's failure to missing runtime C++ static roots; wasm32 cannot yet reach startup for comparison. |
 | Tagged jank map retention across wasm64 collections. | An explicitly registered static root passes; the default unregistered root is lost. This is a diagnostic control, not a runtime rooting solution. |
 | Real wasm64 spike with GC disabled during execution and explicit top-level collections. | Both success markers in 20 iterations, including post-collection loaded-function re-entry; churn/extra-collection variant also passes with bounded observed used memory. |
+| Emscripten compiler + WASI ABI shim + Wasmtime, wasm64 spike. | Both markers and exit 0 with static roots and the private spill transform; not a native wasi-sdk runtime port. See [WASI](#wasi). |
 
 The native Zig C++ build still uses the installed jank package's matching libc++, libunwind and LLVM 23 compiler runtime. It does not rebuild all dependencies with Zig. The generated launcher's extraction also invokes the installed jank compiler before the final Zig compilation.
 
@@ -1943,6 +1944,143 @@ general Wasm support. They do not validate browser behavior, arbitrary tail
 calls, suspension/callbacks, high addresses, stack-overflow handling, all
 runtime code paths, or production exception ownership. Weak links guard the
 observed objects, not every internal vector/map node or backing allocation.
+
+## WASI
+
+This AI-assisted Linux x86_64 experiment uses **Emscripten compiler + WASI ABI
+shim + Wasmtime**, not native wasi-sdk WASI or general WASI support. The real
+jank-generated spike and unchanged `native.zig` implementation run with GC
+enabled. Ordinary unrooted startup remains broken. The tracked harness uses
+the current private memory64/EH-cleanup Binaryen patch, `--flatten
+--spill-pointers`, explicit static roots, and the same diagnostic **4 MiB**
+stack as the Node startup-spill path.
+
+Pinned tools: **wasi-sdk 34.0** (Clang 23.1.0-wasi-sdk), **Wasmtime 50.0.2**,
+**Zig 0.17.1**, **Emscripten 7.0.0**, **Binaryen 133** for merge/exnref,
+and patched Binaryen **`a9141c8cc`** for spilling. Initial toolchain probes:
+
+| Route / probe | Compile / link / run result |
+| --- | --- |
+| wasi-sdk, wasm32-wasip1 C++ exceptions | Compiles; links with explicit `-lunwind`; catch marker and exit 0 after exnref translation. Not the jank runtime. |
+| wasi-sdk, wasm64-wasip1 | No wasm64 sysroot: C/C++ fail at `stdio.h` / `cstdio`; attempted wasi-libc build rejects the ABI. |
+| Zig, wasm32-wasi | C hello runs; C++ EH compiles with `-mexception-handling` but lacks exception/unwind link symbols. |
+| Zig, wasm64-wasi | Libc headers unavailable; minimal Zig executable links but its i64-pointer `random_get` import mismatches Wasmtime. |
+| Unchanged Zig spike alone, wasm32/wasm64 | Both freestanding objects link with the isolated C caller; `run` returns 0 under Wasmtime. No WASI imports or jank markers. |
+| Emscripten standalone, wasm32 C++ EH | Compiles/links; catch marker and exit 0 after exnref translation. |
+| Emscripten standalone, wasm64 C++ EH | Compiles/links/translates; `fd_write` i64-pointer ABI mismatches the host. |
+| Emscripten wasm64 jank spike + ABI shim | Links/transforms/runs; both Zig markers, exit 0 under Wasmtime. |
+
+### First blockers and their scope
+
+- wasi-sdk has no wasm64 libc/sysroot: `'stdio.h' file not found` and
+  `'cstdio' file not found`. Building wasi-libc
+  `f762ab41b0953a4e7340b409697e6625993d60f1` for wasm64 fails:
+  `<wasi/api.h> only supports wasm32; doesn't yet support wasm64` and
+  `_Alignof(void *) == 4` / `non-wasi data layout` (`8 == 4`). This is not
+  just a missing SDK packaging option.
+- Wasmtime 50's Preview 1 host pointers/lengths are **i32**, even for a core
+  memory64 module. The standalone wasm64 hello reports:
+  `expected type (func (param i32 i64 i64 i64) (result i32)), found type
+  (func (param i32 i32 i32 i32) (result i32))` for `fd_write`.
+  [Bindings](https://github.com/bytecodealliance/wasmtime/blob/v50.0.2/crates/wasi/src/p1.rs#L853-L868)
+  use WITX and [u32 guest pointers](https://github.com/bytecodealliance/wasmtime/blob/v50.0.2/crates/wiggle/src/lib.rs#L360-L366).
+  The small `memory64-p1-abi32.wat` control works: memory64 itself is not the blocker.
+- `-W component-model-memory64=y` exists, but Wasmtime's
+  [configuration source](https://github.com/bytecodealliance/wasmtime/blob/v50.0.2/crates/wasmtime/src/config.rs#L1391-L1400)
+  calls that support **"very incomplete"**. No Preview 2 component route was
+  built here; the flag is not evidence of a usable wasm64 WASI libc.
+- Original C++ EH modules fail Wasmtime validation with
+  `legacy_exceptions feature required for try instruction`.
+  Binaryen `--translate-to-exnref` resolves that format issue for these runs.
+- Unpatched Binaryen 133 `--spill-pointers` aborts with `unhandled pointerType`
+  / `UNREACHABLE ... abi/stack.h:64`, even with a named i64 `__stack_pointer`.
+  The repository's private patch remains required.
+
+Representative wasi-sdk wasm32 jank compilation (nine real translation units):
+
+| Category | First observed blocker / diagnostic result |
+| --- | --- |
+| Object/core/context/future/string and util environment/try/path | 8/9 stop first at `sizeof(unsigned long long) == sizeof(void *)` (`8 == 4`). Same representation blocker as Emscripten wasm32. |
+| Private local bypass of only the two pointer-width asserts | Still fails: `oref` `bit_cast` size constraints, narrowing from `unsigned long long` to `unsigned long`, and `Unsupported environment.` No representation workaround. |
+| Executable-path discovery | `environment.cpp`: `Unsupported platform`; no existing WASI platform branch. |
+| Module loader/filesystem | First loader error: `WASI lacks a true mmap` (requires explicit emulation flags/library). |
+| cpptrace | `platform/platform.hpp:18: "Unexpected platform"`; current Emscripten runtime excludes it. |
+| Pinned bdwgc | Non-threaded `alloc.c` compiles; threaded probe hits WASI signal emulation and `No multi-threading support yet`. |
+| Isolated threads/atomics, filesystem, dlopen, setjmp, Boost multiprecision | Objects compile; not proof of linking, host capabilities, JIT availability, or a runtime port. |
+
+### Reproduce the shim route
+
+From the repository root:
+
+```sh
+bash experiments/zig-wasm/scripts/wasi-probe.sh
+bash experiments/zig-wasm/scripts/wasi-shim-tests.sh
+experiments/zig-wasm/.tools/node-v26.13.1-linux-x64/bin/node \
+  --test experiments/zig-wasm/scripts/wasi-imports-test.mjs
+```
+
+The main script downloads missing pinned SDK/Wasmtime/Binaryen releases into
+ignored `.tools/wasi`, checking archive SHA256s. It reuses the existing
+`jank-zig.py` bootstrap for Docker/native/Emscripten/patched Binaryen prerequisites,
+then rebuilds the native spike and Node startup-spill control before the WASI
+link. Host prerequisites are the same as the Linux wrapper, plus `sha256sum`
+and `rg`; packages are installed **only inside the container**, never on the
+host. An obsolete private Binaryen source tree is preserved under ignored
+`.tools/wasi/binaryen-previous-*` before extracting the clean pinned source.
+As with the Node wrapper, changed compiler/runtime sources require explicit
+prerequisite rebuilds. No browser tooling is needed for these WASI commands.
+
+The exact final command, from `experiments/zig-wasm`, is:
+
+```sh
+.tools/wasi/wasmtime-v50.0.2-x86_64-linux/wasmtime run \
+  -W memory64=y -W exceptions=y artifacts/wasi-probes/spike-wasi.wasm static-roots
+```
+
+Successful marker excerpt (process exit **0**):
+
+```text
+jank -> Zig: scalar and wide result checks passed
+jank -> Zig: borrowed-buffer checks passed
+```
+
+The harness additionally requires both exact markers and prints
+`WASI SPIKE VERDICT: PASS (both markers and exit 0)`. Exact commands, stage
+statuses, imports and runtime output go to `artifacts/logs/wasi/step3-*.log`;
+the final binary and disassembly stay in ignored `artifacts/wasi-probes`.
+
+`scripts/wasi-standalone-link.sh` links the existing generated objects with
+`-sSTANDALONE_WASM`. `scripts/wasi-imports.mjs` lists and rewrites only supported
+imports, rejecting others. The original module has twelve Preview 1 imports
+and just one `env` import: `emscripten_notify_memory_growth(i64)`. There are
+no `__syscall_*` imports. Its shim notification is a no-op because no JS views
+need refreshing. The merged module has only the twelve standard i32-ABI
+Preview 1 host imports and one shared memory64 memory.
+
+`wasi-probe/wasi64-shim.c` compiles freestanding, without a wasm64 libc. It
+converts 16-byte iovecs to 8-byte host iovecs in a 256 KiB scratch reservation,
+widens byte/count results, and converts argument/environment pointer arrays.
+All bridged pointer ranges must fit below 4 GiB or trap. This is a bounded,
+single-threaded/non-reentrant adapter, with at most 8192 iovecs/pointers per
+call, not a complete WASI port. The fixture checks normal/empty writes, bad
+FD errors, argument layout, high pointers, crossing ranges and count overflow.
+The small original toolchain/ABI fixtures also live in `wasi-probe/`.
+
+Compared with Emscripten/Node, the final WASI module needs **no JS glue** and
+uses a standard OS-I/O interface under Wasmtime, a useful server-runtime route.
+The cost is the absent wasm64 WASI libc and this explicit ABI shim; browsers
+still need a JS WASI polyfill/host layer, and threads/sockets/platform services
+remain limited by the runtime and Preview 1. The same experimental GC rooting,
+exception ownership and stack-headroom caveats apply. Passing this one workload
+does not establish general jank WASI support or >4-GiB interoperability.
+
+Wasm GC does not automatically collect the current C++/bdwgc object graph:
+its objects and NaN-boxed references are bytes/integers in linear memory, not
+engine-managed GC references. Adopting Wasm GC would need a GC-aware codegen
+and runtime representation rewrite (allocation, field access, dispatch and FFI
+ownership), or an explicit hybrid handle/root-table design; enabling a target
+flag cannot replace bdwgc. See the separate
+[Wasm GC research report](wasm-gc-probe/REPORT.md).
 
 ## Files
 

@@ -22,7 +22,7 @@ int JANK_ENTRY_LAUNCHER(int argc, char const **argv);
 int jank_assertion_main(int argc, char const **argv);
 #endif
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(__wasi__)
 extern "C" char __global_base, __data_end;
 #endif
 
@@ -86,7 +86,7 @@ int main(int argc, char const **argv)
   {
     GC_disable();
   }
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) || defined(__wasi__)
   else if(collect_at_safepoints || continuous || (argc > 1 && std::strcmp(argv[1], "static-roots") == 0))
   {
     GC_init();

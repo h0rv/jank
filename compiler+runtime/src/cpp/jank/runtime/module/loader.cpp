@@ -271,6 +271,7 @@ namespace jank::runtime::module
                                                             "clojure.walk",
                                                             "jank.perf-native",
                                                             "jank.compiler-native",
+#ifndef JANK_NO_NREPL
                                                             "jank.nrepl.server.inspect",
                                                             "jank.nrepl.server.core",
                                                             "jank.nrepl.server.handler",
@@ -283,7 +284,9 @@ namespace jank::runtime::module
                                                             "jank.nrepl.server.handler.describe",
                                                             "jank.nrepl.server.handler.completions",
                                                             "jank.nrepl.server.handler.eval",
-                                                            "jank.nrepl.server.handler.lookup" };
+                                                            "jank.nrepl.server.handler.lookup",
+#endif
+    };
     return modules;
   }
 

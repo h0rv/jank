@@ -21,3 +21,15 @@ diff --git a/folly/system/ThreadId.cpp b/folly/system/ThreadId.cpp
  #else
    return uint64_t(syscall(FOLLY_SYS_gettid));
  #endif
+diff --git a/folly/concurrency/CacheLocality.cpp b/folly/concurrency/CacheLocality.cpp
+--- a/folly/concurrency/CacheLocality.cpp
++++ b/folly/concurrency/CacheLocality.cpp
+@@ -325 +325 @@
+-#if !defined(FOLLY_HAVE_LINUX_VDSO) || defined(FOLLY_SANITIZE_MEMORY)
++#if !defined(FOLLY_HAVE_LINUX_VDSO) || defined(FOLLY_SANITIZE_MEMORY) || defined(__wasi__)
+diff --git a/folly/system/AtFork.cpp b/folly/system/AtFork.cpp
+--- a/folly/system/AtFork.cpp
++++ b/folly/system/AtFork.cpp
+@@ -125 +125 @@
+-#if FOLLY_HAVE_PTHREAD_ATFORK // if no pthread_atfork, probably no fork either
++#if FOLLY_HAVE_PTHREAD_ATFORK && !defined(__wasi__) // if no pthread_atfork, probably no fork either

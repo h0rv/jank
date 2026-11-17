@@ -565,7 +565,12 @@ int main(int argc, const char** argv)
     }
 
     compiler_args.push_back("-include");
-    auto prelude_path{ util::prelude_hpp_path() };
+    auto const target_config{ load_target_config(util::cli::opts.target_config).expect_ok() };
+    auto const cross_config{ !target_config.triple.empty()
+                             && target_config.triple
+                               != jtl::immutable_string{ llvm::sys::getDefaultTargetTriple() } };
+    auto prelude_path{ cross_config ? jtl::result<jtl::immutable_string, error_ref>{ "jank/prelude.hpp" }
+                                   : util::prelude_hpp_path() };
     if(prelude_path.is_err())
     {
       return prelude_path.expect_err();
@@ -590,7 +595,6 @@ int main(int argc, const char** argv)
 
     //util::println("compilation command: {} ", compiler_args);
 
-    auto const target_config{ load_target_config(util::cli::opts.target_config).expect_ok() };
     auto const res{ util::invoke_clang(compiler_args, target_config.clang_bin) };
     if(res.is_err())
     {

@@ -4099,8 +4099,8 @@ if (Module['printErr']) err = Module['printErr'];
 // end include: postlibrary.js
 
 var ASM_CONSTS = {
-  574412: () => { const n = Module.jankCollectEvery ?? 1; return Number.isInteger(n) && n >= 1 && n <= 60 ? n : 1; },  
- 574513: ($0, $1, $2, $3, $4) => { Module.jankFrameStats = ({frames: Number($0), collections: Number($1), heap: Number($2), used: Number($3), memory: HEAPU8.buffer.byteLength, time: performance.now(), collectEvery: $4}); Module.onJankFrame?.(Module.jankFrameStats); }
+  574396: () => { const n = Module.jankCollectEvery ?? 1; return Number.isInteger(n) && n >= 1 && n <= 60 ? n : 1; },  
+ 574497: ($0, $1, $2, $3, $4) => { Module.jankFrameStats = ({frames: Number($0), collections: Number($1), heap: Number($2), used: Number($3), memory: HEAPU8.buffer.byteLength, time: performance.now(), collectEvery: $4}); Module.onJankFrame?.(Module.jankFrameStats); }
 };
 function live_input_size() { const text = Module.liveInput; return typeof text === 'string' ? lengthBytesUTF8(text) : -1; }
 function live_input_copy(out,size) { stringToUTF8(Module.liveInput, Number(out), size + 1); Module.liveInput = null; }

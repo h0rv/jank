@@ -64,22 +64,49 @@ cd experiments/zig-wasm
 ./jank-zig serve            # http://127.0.0.1:8765/; Ctrl-C to stop
 ```
 
-`build [app-dir]` defaults to this experiment. An alternative app directory
-must contain `native.zig` and `jank/src/spike/core.jank`, with namespace
-`spike.core`, entry point `-main`, the same Zig C ABI and success markers.
-An optional `build.zig` can customize the Zig library build (library name
-`spike`); otherwise the default is reused. This is a spike-layout driver, not
-a general project/package format. Sources are copied into ignored staging
-before compilation; input directories are not modified.
+Every command accepts an optional final project directory, defaulting to this
+experiment's spike. A project contains `jank-zig.json`:
 
-Outputs are `artifacts/app/native/spike` and
-`artifacts/app/wasm/{spike.js,spike.wasm,index.html}`. The native executable
+```json
+{"name": "hello", "main": "hello.core", "jank": "src", "zig": "zig/main.zig",
+ "expect": ["hello: checks passed"]}
+```
+
+`main` names the namespace whose `-main` runs. Defaults are the directory name
+for `name`, `src` for `jank`, and `native.zig` for `zig`; source paths must stay
+inside the project. `expect` is required and contains nonempty exact output
+lines, or an object with `native`, `node`, and `browser` line lists. Checks
+require exit 0 **and** those lines (jank AOT can exit 0 after a failed assert).
+An optional `build.zig` overrides the generated native library build and must
+install both static/shared libraries named `name`; the Wasm kernel compiles
+directly from `zig`. Multi-file Zig imports relative to that root are supported.
+Sources are copied into fresh ignored staging for each platform, including all
+transitively emitted jank modules; inputs are not modified. Project names must
+be unique within this checkout's output directory.
+
+```sh
+./jank-zig check examples/hello-cljc  # builds and checks native, Node and Chrome
+./jank-zig run browser examples/hello-cljc
+```
+
+This second example shares its entry namespace, borrowed-buffer Zig kernel and
+checks across three jank namespaces. Its `hello/platform.cljc` selects a thin
+output layer with `#?(:wasm ... :native ...)`: native stdout, browser `#app`, or
+Node console. Host jank receives repeatable `--reader-feature native` or
+`--reader-feature wasm` during source generation; features also separate its
+binary-version cache. `:jank` still matches both builds, so put platform branches
+before a `:jank` fallback. Explicit `read-string` reader options are unchanged.
+
+Outputs are `artifacts/app/<name>/native/<name>` and
+`artifacts/app/<name>/wasm/{<name>.js,<name>.wasm,index.html}`. The native executable
 contains the static jank runtime, but still needs Ubuntu 24.04-compatible
 system libraries; it is not a statically linked portable Linux binary.
-The Wasm JS defaults to continuous-GC mode, including when invoked directly
-with Node. The page displays stdout and sets `data-status="pass"` on the root
-element and a PASS title only after all 20 marker pairs and final GC-enabled
-completion. `check` requires native, Node and headless Chrome success and
+Generic Wasm projects run once in `static-roots` mode. The spike config retains
+`"wasm_check": "spike-continuous"`: 20 continuous-GC iterations validated by
+the existing safepoint checker for Node and browser. The generated page displays
+stdout and provides `#app` for DOM output; it sets `data-status="pass"` and a PASS
+title only after exit 0 and all expected lines. `check` rebuilds the project,
+requires native, Node and headless Chrome success and
 prints a verdict table. Logs and browser DOM evidence are in
 `artifacts/logs/app/`. `serve --port N` selects another port.
 

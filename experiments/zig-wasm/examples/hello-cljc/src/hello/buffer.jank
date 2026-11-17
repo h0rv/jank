@@ -1,0 +1,31 @@
+;; AI-assisted example: shared borrowed-buffer checks, with caller-owned storage.
+(ns hello.buffer)
+
+(cpp/raw "#include <cstddef>
+#include <cstdint>
+#include <vector>
+extern \"C\" int hello_weighted(const std::int32_t*, std::size_t, std::int64_t*);")
+
+(defn weighted []
+  (let [buffer (cpp/new (std.vector std.int32_t))
+        out (cpp/new cpp/std.int64_t (cpp/std.int64_t. 99))]
+    (try
+      (cpp/.resize (cpp/* buffer) (cpp/std.size_t. 4))
+      (let [values (cpp/.data (cpp/* buffer))]
+        (cpp/= (cpp/aget values (cpp/int. 0)) (cpp/std.int32_t. 1))
+        (cpp/= (cpp/aget values (cpp/int. 1)) (cpp/std.int32_t. 2))
+        (cpp/= (cpp/aget values (cpp/int. 2)) (cpp/std.int32_t. 3))
+        (cpp/= (cpp/aget values (cpp/int. 3)) (cpp/std.int32_t. 4))
+        (assert (= 0 (cpp/hello_weighted cpp/nullptr (cpp/std.size_t. 0) out)))
+        (assert (= 0 (cpp/* out)))
+        (cpp/= (cpp/* out) (cpp/std.int64_t. 99))
+        (assert (= 1 (cpp/hello_weighted cpp/nullptr (cpp/std.size_t. 1) out)))
+        (assert (= 99 (cpp/* out)))
+        (assert (= 1 (cpp/hello_weighted values (cpp/std.size_t. 4) cpp/nullptr)))
+        (assert (= 0 (cpp/hello_weighted values (cpp/std.size_t. 4) out)))
+        (assert (= 30 (cpp/* out)))
+        (assert (= 4 (cpp/aget values (cpp/int. 3))))
+        (identity (cpp/* out)))
+      (finally
+        (cpp/delete out)
+        (cpp/delete buffer)))))

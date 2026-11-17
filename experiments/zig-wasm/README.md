@@ -124,12 +124,12 @@ be unique within this checkout's output directory.
 ```
 
 This pure-jank example computes the weighted sum of `[1 2 3 4]` as 30 and shares
-its logic and checks across three namespaces. Its `hello/platform.cljc` selects
-a thin output layer with `#?(:wasm ... :native ...)`: native stdout, browser `#app`, or
-Node console. Host jank receives repeatable `--reader-feature native` or
-`--reader-feature wasm` during source generation; features also separate its
-binary-version cache. `:jank` still matches both builds, so put platform branches
-before a `:jank` fallback. Explicit `read-string` reader options are unchanged.
+its logic and checks across three namespaces. Its `hello/platform.jank` uses
+a thin C++ output bridge: native stdout, browser `#app`, or Node console.
+The target C++ compiler selects the implementation with `__EMSCRIPTEN__`;
+jank source and reader semantics are identical for both builds. The driver
+uses separate native/Wasm staging directories and caches. Explicit
+`read-string` reader options are unchanged.
 
 Outputs are `artifacts/app/<name>/native/<name>` and
 `artifacts/app/<name>/wasm/{<name>.js,<name>.wasm,index.html}`. The native executable
@@ -2029,7 +2029,7 @@ docker exec --user 1000:1000 jank-host-build \
 # Substitute --trace-wasm-compilation-times or the engine flags above for --cpu-prof.
 ```
 
-If the reused host compiler rejects `--reader-feature`, refresh it with the
+After changing compiler/runtime sources, refresh the host compiler with the
 documented `docker exec --user 1000:1000 jank-host-build bash
 scripts/build-host-linux.sh host` first. No host SDK/system installation is needed.
 

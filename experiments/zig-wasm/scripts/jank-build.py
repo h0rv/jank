@@ -296,7 +296,7 @@ def generate_sources(project, stage, platform, prefix, run):
     host = ROOT / 'artifacts/build-host/jank'
     flags = ['env', 'LANG=C.UTF-8', 'LC_ALL=C.UTF-8',
              f'JANK_RUNTIME_DIR={ROOT / "artifacts/host-resources"}',
-             host, '--reader-feature', platform,
+             host,
              '--module-path', stage / project.jank.relative_to(project.root),
              '--target-dir', stage / 'target']
     flags.extend(c_dependencies(project, platform).include_flags())

@@ -37,7 +37,7 @@ namespace jank::read::parse
     }
 
     lex::processor l_prc{ mapped_file.expect_ok().view(), offset };
-    parse::processor p_prc{ l_prc.begin(), l_prc.end(), configured_features(), true, false };
+    parse::processor p_prc{ l_prc.begin(), l_prc.end() };
 
     auto it{ p_prc.begin() };
     for(usize i{}; i < n; ++i, ++it)

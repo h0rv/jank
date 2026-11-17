@@ -28,7 +28,8 @@ controls. Browser builds need memory64, Wasm exceptions and WebGL2.
 ## Changes from upstream
 
 - Extract one iteration into `frame`, keep state in an atom and leave native
-  looping, pacing and window cleanup behind `:native`. Browser RAF owns pacing.
+  looping, pacing and window cleanup behind a compile-time C++ bridge.
+  Browser RAF owns pacing.
 - Allow Space or a canvas click to start, and held left mouse as an alternative
   to held Space. Keep upstream physics, collisions, scoring, colors and drawing.
 - Draw a bobbing bird on the otherwise static main menu, reusing its drawing.

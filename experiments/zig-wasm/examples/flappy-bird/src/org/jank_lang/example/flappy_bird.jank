@@ -3,6 +3,16 @@
   (:include "raylib.h"
             "raygui.h"))
 
+;; AI-assisted compile-time bridge; browser frames are driven by RAF.
+(cpp/raw "inline bool flappy_native_loop() {
+#ifdef __EMSCRIPTEN__
+  return false;
+#else
+  SetTargetFPS(60);
+  return true;
+#endif
+}")
+
 (def max-tube-columns 100)
 (def tube-width 80)
 (def bird-speed 2)
@@ -207,20 +217,19 @@
 
 (defn -main [& args]
   (cpp/InitWindow screen-width screen-height "janky bird")
-  #?(:native (cpp/SetTargetFPS 60))
-  (reset! global-state (start-game default-state))
-  (assert (= 100 (count (:columns @global-state))))
-  (assert (= 80 (get-in @global-state [:bird :x])))
-  (assert (= :main-menu (:mode @global-state)))
-  (println "flappy-bird: rules passed")
-  (println "flappy-bird: initialized")
-  #?(:native
-     (do
-       (while (and (cpp/! (cpp/WindowShouldClose))
-                   (or (empty? args) (< (cpp/GetTime) 2)))
-         (frame))
-       (cpp/CloseWindow)
-       (println "flappy-bird: native loop completed"))))
+  (let [native-loop? (cpp/flappy_native_loop)]
+    (reset! global-state (start-game default-state))
+    (assert (= 100 (count (:columns @global-state))))
+    (assert (= 80 (get-in @global-state [:bird :x])))
+    (assert (= :main-menu (:mode @global-state)))
+    (println "flappy-bird: rules passed")
+    (println "flappy-bird: initialized")
+    (when native-loop?
+      (while (and (cpp/! (cpp/WindowShouldClose))
+                  (or (empty? args) (< (cpp/GetTime) 2)))
+        (frame))
+      (cpp/CloseWindow)
+      (println "flappy-bird: native loop completed"))))
 
 (comment
   (def fut (future (-main))))

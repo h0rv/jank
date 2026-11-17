@@ -12,8 +12,6 @@
 /* TODO: Rename file to processor. */
 namespace jank::read::parse
 {
-  runtime::object_ref configured_features();
-
   struct char_parse_error
   {
     jtl::immutable_string error;

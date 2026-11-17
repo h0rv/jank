@@ -9,8 +9,8 @@ is attribution, not a license grant. Raylib and raygui have separate zlib
 licenses retained by their build recipe.
 
 AI-assisted changes to the frontend: factor one loop iteration into `frame`,
-keep the native loop/CloseWindow behind `:native`, and let Wasm initialization
-return to the browser driver. Keep `SetTargetFPS` native-only: browser RAF
+keep the native loop/CloseWindow behind a compile-time C++ bridge, and let Wasm
+initialization return to the browser driver. Keep `SetTargetFPS` native-only: browser RAF
 owns pacing, avoiding a second busy-wait in raylib's `EndDrawing`.
 Print an initialization marker. The shared
 `core.cljc` is byte-for-byte unchanged. Portal/tap development code is retained.

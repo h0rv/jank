@@ -51,11 +51,7 @@ namespace jank::runtime
   {
     profile::timer const timer{ "rt eval_string" };
     read::lex::processor l_prc{ code, p };
-    read::parse::processor p_prc{ l_prc.begin(),
-                                  l_prc.end(),
-                                  read::parse::configured_features(),
-                                  true,
-                                  false };
+    read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
 
     bool no_op{ true };
     object_ref ret{};
@@ -175,11 +171,7 @@ namespace jank::runtime
   {
     profile::timer const timer{ "rt analyze_string" };
     read::lex::processor l_prc{ code };
-    read::parse::processor p_prc{ l_prc.begin(),
-                                  l_prc.end(),
-                                  read::parse::configured_features(),
-                                  true,
-                                  false };
+    read::parse::processor p_prc{ l_prc.begin(), l_prc.end() };
 
     analyze::processor an_prc;
     native_vector<analyze::expression_ref> ret{};

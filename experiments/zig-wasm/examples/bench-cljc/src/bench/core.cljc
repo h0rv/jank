@@ -12,8 +12,7 @@ inline double bench_clock_ms() {
 
 (defn now-ms []
   #?(:cljs (js/performance.now)
-     :native (cpp/bench_clock_ms)
-     :wasm (cpp/bench_clock_ms)))
+     :default (cpp/bench_clock_ms)))
 
 (defn fib [n]
   (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))

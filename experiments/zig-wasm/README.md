@@ -67,7 +67,7 @@ in ignored `artifacts/pages/jank-wasm/`. It includes the site sources from
 `site/`, `live.js`, `live.wasm` and `.nojekyll`, but no unspilled diagnostic
 binary or CNAME. Code blocks marked `data-lang` are highlighted at build time by
 `tools/site-highlight`, a small Rust tool using arborium 2.18.2, so the host
-also needs Cargo; the page loads no highlighting script. Internal links/assets are relative for the `/jank-wasm/` prefix.
+also needs Cargo; the page loads no highlighting script. Internal links/assets are relative for the `/jank-wasm/` prefix. The script stamps local CSS, JS and iframe references with `?v=` plus a content hash, and the runners pass it on to the `.js`/`.wasm` they load, because horv.co caches JS for 4 hours but HTML for 10 minutes; without the stamp a republish could pair a new page with an old runner.
 Serve `artifacts/pages/` locally and open `/jank-wasm/` to check before publishing.
 Publish only the assembled directory's contents at the root of `gh-pages`, in a
 new commit preserving that branch's history; the script does not push. The

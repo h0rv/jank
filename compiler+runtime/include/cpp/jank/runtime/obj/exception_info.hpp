@@ -50,7 +50,7 @@ namespace jank::runtime::obj
     jtl::immutable_string message;
     object_ref data;
     exception_info_ref cause;
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     std::unique_ptr<cpptrace::raw_trace> raw_trace;
     std::unique_ptr<cpptrace::stacktrace> resolved_trace;
 #endif

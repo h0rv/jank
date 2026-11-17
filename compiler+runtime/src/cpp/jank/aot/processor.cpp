@@ -41,7 +41,11 @@ namespace jank::aot
 
 using jank_object_ref = void*;
 using jank_bool = char;
+#if __SIZEOF_POINTER__ == 8
 using jank_usize = unsigned long long;
+#else
+using jank_usize = __SIZE_TYPE__;
+#endif
 
 extern "C" int jank_init_dynamic(int const argc,
                          char const ** const argv,

@@ -59,6 +59,9 @@ namespace jank::environment
       case jtl::platform::other_unix_like:
         os = "unix";
         break;
+      case jtl::platform::wasi:
+        os = "wasi";
+        break;
     }
 
     return util::format("{}─ ✅{} operating system: {}", text_style::green, text_style::reset, os);

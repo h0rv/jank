@@ -36,6 +36,17 @@ if(WIN32)
   )
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+  set(folly_source_dir "${CMAKE_BINARY_DIR}/folly-source")
+  file(COPY "${PROJECT_SOURCE_DIR}/third-party/folly/" DESTINATION "${folly_source_dir}" PATTERN ".git" EXCLUDE)
+  execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env "GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}"
+      "${GIT_EXECUTABLE}" apply --verbose --unidiff-zero "${CMAKE_CURRENT_LIST_DIR}/folly-wasi.patch"
+    WORKING_DIRECTORY "${folly_source_dir}"
+    COMMAND_ERROR_IS_FATAL ANY)
+  list(TRANSFORM folly_sources REPLACE "^third-party/folly/" "${folly_source_dir}/")
+endif()
+
 add_library(folly_lib STATIC ${folly_sources})
 set_source_files_properties(${folly_sources} PROPERTIES SKIP_LINTING ON)
 target_include_directories(

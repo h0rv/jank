@@ -73,7 +73,7 @@ set(jank_cxx_standard cxx_std_20)
 #   ${jank_link_whole_start} jank_common_lib ${jank_link_whole_end}
 #   ${jank_link_whole_start} nanobench_lib ${jank_link_whole_end}
 #
-if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux" OR ${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
+if("${CMAKE_SYSTEM_NAME}" STREQUAL "Linux" OR "${CMAKE_SYSTEM_NAME}" STREQUAL "Emscripten" OR "${CMAKE_SYSTEM_NAME}" STREQUAL "WASI")
   set(jank_link_whole_start "-Wl,--whole-archive")
   set(jank_link_whole_end "-Wl,--no-whole-archive")
 elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
@@ -110,13 +110,16 @@ set(
   -std=gnu++20
   -DJANK_VERSION="${jank_version}"
   -DJANK_CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
-  -DPOINTER_MASK=0x0000FFFFFFFFFFFF
   -DIMMER_HAS_LIBGC=1 -DIMMER_TAGGED_NODE=0 -DHAVE_CXX14=1
   -DCPPINTEROP_USE_REPL
   -DFOLLY_HAVE_JEMALLOC=0 -DFOLLY_HAVE_TCMALLOC=0 -DFOLLY_ASSUME_NO_JEMALLOC=1 -DFOLLY_ASSUME_NO_TCMALLOC=1
   #-DLIBASSERT_STATIC_DEFINE=1
   #-stdlib=libc++
 )
+
+if(CMAKE_SIZEOF_VOID_P EQUAL 8)
+  list(APPEND jank_common_compiler_flags -DPOINTER_MASK=0x0000FFFFFFFFFFFF)
+endif()
 
 if(jank_emulated_tls)
   # https://groups.google.com/g/llvm-dev/c/W-OweiAjDcU?pli=1
@@ -255,7 +258,7 @@ include(cmake/sanitization.cmake)
 set(CMAKE_EXPORT_COMPILE_COMMANDS on)
 # Also include the system includes in the compile_commands.json so that weird
 # systems like NixOS can have tooling work properly.
-if(NOT EMSCRIPTEN)
+if(NOT EMSCRIPTEN AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
   set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
 endif()
 
@@ -466,7 +469,7 @@ set(jank_standalone_static_lib_deps
   folly_lib
 )
 
-if(NOT EMSCRIPTEN)
+if(NOT EMSCRIPTEN AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
   list(APPEND jank_standalone_static_lib_deps cpptrace::cpptrace)
 endif()
 set(jank_standalone_dynamic_lib_deps
@@ -531,7 +534,7 @@ set(BUILD_SHARED_LIBS OFF)
 
 include(FetchContent)
 include(cmake/dependency/bdwgc.cmake)
-if(NOT EMSCRIPTEN)
+if(NOT EMSCRIPTEN AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
   include(cmake/dependency/cpptrace.cmake)
 else()
   set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "Build zstd programs")
@@ -542,6 +545,9 @@ else()
     URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
     SOURCE_SUBDIR build/cmake)
   FetchContent_MakeAvailable(zstd)
+  if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    target_compile_options(libzstd_static PRIVATE -U_GNU_SOURCE)
+  endif()
 endif()
 include(cmake/dependency/cppinterop.cmake)
 include(cmake/dependency/boost-multiprecision.cmake)
@@ -728,7 +734,7 @@ target_link_libraries(
   bdwgc::gc bdwgc::gctba
 )
 
-if(NOT EMSCRIPTEN)
+if(NOT EMSCRIPTEN AND NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
   target_link_libraries(jank_common_lib PRIVATE cpptrace::cpptrace)
 endif()
 
@@ -1002,11 +1008,15 @@ if(jank_enable_phase_2)
   target_link_directories(jank_exe_phase_2 PRIVATE "$<TARGET_PROPERTY:jank_exe_phase_1,LINK_DIRECTORIES>")
   target_link_options(jank_exe_phase_2 PRIVATE "$<TARGET_PROPERTY:jank_exe_phase_1,LINK_OPTIONS>")
 
-  target_link_libraries(
-    jank_exe_phase_2 PUBLIC
-    "$<TARGET_PROPERTY:jank_exe_phase_1,LINK_LIBRARIES>"
-    jank_lib_phase_2
-  )
+  if(CMAKE_SYSTEM_NAME STREQUAL "WASI" AND jank_cross_compile)
+    target_link_libraries(jank_exe_phase_2 PUBLIC jank_lib_phase_2)
+  else()
+    target_link_libraries(
+      jank_exe_phase_2 PUBLIC
+      "$<TARGET_PROPERTY:jank_exe_phase_1,LINK_LIBRARIES>"
+      jank_lib_phase_2
+    )
+  endif()
 
   add_dependencies(jank_exe_phase_2 jank_core_libraries)
 else()

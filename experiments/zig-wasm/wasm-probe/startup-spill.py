@@ -8,7 +8,10 @@ import time
 
 root = pathlib.Path(sys.argv[1])
 iterations = int(sys.argv[2])
-out = root / 'artifacts/wasm64-spike'
+bits = sys.argv[3] if len(sys.argv) > 3 else '64'
+if bits not in ('32', '64'):
+    sys.exit('Wasm width must be 32 or 64')
+out = root / f'artifacts/wasm{bits}-spike'
 logs = root / 'artifacts/logs'
 node = root / '.tools/node-v26.13.1-linux-x64/bin/node'
 exe = out / 'startup-spill.js'
@@ -26,7 +29,7 @@ for variant in ['baseline', 'spill']:
     summary.append(f'STARTUP SIZE: variant={variant} wasm-bytes={wasm.stat().st_size}')
     for mode in ['static-roots', 'continuous', 'no-gc-reentry']:
         for sample in range(1, 4 if mode == 'no-gc-reentry' else 2):
-            path = logs / f'wasm64-startup-spill-{variant}-{mode}-{sample}.log'
+            path = logs / f'wasm{bits}-startup-spill-{variant}-{mode}-{sample}.log'
             start = time.monotonic()
             try:
                 result = subprocess.run([str(node), str(exe), mode, str(iterations)],
@@ -66,7 +69,7 @@ passed = (all(correct['spill', mode, 1] for mode in ['static-roots', 'continuous
           and all(correct[variant, 'no-gc-reentry', sample]
                   for variant in ['baseline', 'spill'] for sample in range(1, 4)))
 summary.append(f'STARTUP SPILL VERDICT: {"PASS" if passed else "FAIL"}')
-path = logs / 'wasm64-startup-spill.results'
+path = logs / f'wasm{bits}-startup-spill.results'
 path.write_text('\n'.join(summary) + '\n')
 print(path.read_text(), end='')
 sys.exit(0 if passed else 1)

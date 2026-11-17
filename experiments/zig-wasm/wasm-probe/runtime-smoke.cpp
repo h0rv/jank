@@ -5,6 +5,7 @@
 
 #include <jank/error.hpp>
 #include <jank/runtime/core.hpp>
+#include <jank/runtime/convert/builtin.hpp>
 #include <jank/runtime/obj/future.hpp>
 #include <jank/util/environment.hpp>
 #include <jank/util/try.hpp>
@@ -12,6 +13,33 @@
 int main()
 {
   using namespace jank;
+  for(i64 const value : { i64{ -2147483648LL }, i64{ 0 }, i64{ 2147483647LL },
+                         i64{ 2147483648LL } })
+  {
+    runtime::object_ref const boxed{ runtime::make_box(value) };
+    runtime::object_ref const heap{ runtime::make_box<runtime::obj::integer>(value) };
+    if(!boxed.equal(heap) || !heap.equal(boxed) || boxed.to_hash() != heap.to_hash()
+       || runtime::convert<i64>::from_object(boxed) != value)
+    {
+      return 5;
+    }
+  }
+  runtime::object_ref const real{ runtime::make_box(1.25) };
+  runtime::object_ref const heap_real{ runtime::make_box<runtime::obj::real>(1.25) };
+  if(!real.equal(heap_real) || !heap_real.equal(real) || real.to_hash() != heap_real.to_hash()
+     || runtime::convert<f64>::from_object(real) != 1.25 || !runtime::object_ref{}.is_nil())
+  {
+    return 6;
+  }
+  try
+  {
+    runtime::convert<i64>::from_object(runtime::object_ref{});
+    return 7;
+  }
+  catch(std::runtime_error const &)
+  {
+  }
+  std::puts("numeric reference representation: passed");
   auto const invoke = [](auto f) {
     int handler{};
     util::try_catch(f,

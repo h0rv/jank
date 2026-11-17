@@ -2,7 +2,7 @@
 
 #include <exception>
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   #include <cpptrace/from_current.hpp>
 #endif
 
@@ -25,7 +25,7 @@ namespace jank::util
   void print_exception(error_ref e);
   void print_current_exception();
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   using cpptrace::try_catch;
   cpptrace::stacktrace resolve(cpptrace::raw_trace const &trace);
 #else

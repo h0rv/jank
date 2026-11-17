@@ -2290,6 +2290,26 @@ through supported jank interop without adding a C++ implementation.
 
 `build.zig` builds static and shared Zig libraries. `jank/src/spike/core.jank` is the Clojure caller. `scripts/` contains the reproduction commands. `wasm-probe/` contains isolated C++ callers, target-header probes and the collector test.
 
+## Shared ClojureScript / native / wasm64 benchmark
+
+The AI-assisted [bench-cljc report](examples/bench-cljc/REPORT.md) compares six
+identical `.cljc` kernels using official ClojureScript 1.12.145 (`:advanced`,
+Node 24), native jank, and the experimental wasm64 spill build. Run from the
+repository root:
+
+```sh
+python3 -B experiments/zig-wasm/examples/bench-cljc/measure.py
+```
+
+The driver bootstraps through jank-build and writes JSON (including ten samples
+per kernel), Markdown tables and logs under ignored `artifacts/bench-cljc/`.
+All three primary targets pass their checksums in the recorded run. The
+explicitly unsafe no-spill variant, with GC disabled, runs out of memory despite
+exit 0; the driver records the failure and exits 1. The report separates build,
+execution, correctness, startup and warm timings, and discusses ratios, the
+4 MiB Wasm stack and private spill-transform limitations. These finite results
+do not establish general Wasm support.
+
 ## Repository policy
 
 The upstream `CONTRIBUTING.md` states that external contributions, including code and copy, must be exclusively human-created. These AI-assisted files are for research in this fork. Do not submit them upstream as human-created work or remove this provenance to bypass that policy.

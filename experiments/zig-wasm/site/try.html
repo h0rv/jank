@@ -21,7 +21,7 @@
   <p>You need Linux x86_64 with Docker, Python 3, curl, tar and Git. The driver builds a <code>jank-host-build</code> Ubuntu 24.04 container and installs pinned compilers in it. Downloads and outputs stay in ignored directories. A clean build takes about 15 to 20 minutes; later builds reuse the toolchain.</p>
   <figure class="block">
     <figcaption>Shell</figcaption>
-    <pre>git clone https://github.com/h0rv/jank-wasm
+    <pre data-lang="bash">git clone https://github.com/h0rv/jank-wasm
 cd jank-wasm/experiments/zig-wasm
 ./jank-build build examples/hello-cljc
 ./jank-build serve --port 8765 examples/hello-cljc</pre>
@@ -32,7 +32,7 @@ cd jank-wasm/experiments/zig-wasm
   <p>Create <code>my-app/src/hello/core.cljc</code> with a <code>hello.core</code> namespace and a <code>-main</code> function, then add <code>my-app/jank-build.json</code>:</p>
   <figure class="block">
     <figcaption>my-app/jank-build.json</figcaption>
-    <pre>{
+    <pre data-lang="json">{
   "name": "my-app",
   "main": "hello.core",
   "jank": "src",
@@ -52,7 +52,7 @@ cd jank-wasm/experiments/zig-wasm
   </table>
   <figure class="block">
     <figcaption>Shell</figcaption>
-    <pre>./jank-build build my-app
+    <pre data-lang="bash">./jank-build build my-app
 ./jank-build serve my-app</pre>
   </figure>
   <p>For browser output versus native or Node stdout, copy the <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/zig-wasm/examples/hello-cljc">example's platform layer</a>, which uses <code>#?(:wasm … :native …)</code>. The generated page also shows plain stdout. Outputs go to <code>artifacts/app/&lt;name&gt;/wasm/</code> and <code>native/</code>.</p>

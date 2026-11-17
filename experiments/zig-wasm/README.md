@@ -58,7 +58,9 @@ The AI-assisted research site at <http://horv.co/jank-wasm/> runs the pure-jank
 `bash scripts/build-pages.sh` to build the example and assemble the static site
 in ignored `artifacts/pages/jank-wasm/`. It includes the site sources from
 `site/`, `hello.js`, `hello.wasm` and `.nojekyll`, but no unspilled diagnostic
-binary or CNAME. Internal links/assets are relative for the `/jank-wasm/` prefix.
+binary or CNAME. Code blocks marked `data-lang` are highlighted at build time by
+`tools/site-highlight`, a small Rust tool using arborium 2.18.2, so the host
+also needs Cargo; the page loads no highlighting script. Internal links/assets are relative for the `/jank-wasm/` prefix.
 Serve `artifacts/pages/` locally and open `/jank-wasm/` to check before publishing.
 Publish only the assembled directory's contents at the root of `gh-pages`, in a
 new commit preserving that branch's history; the script does not push. The

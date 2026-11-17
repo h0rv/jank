@@ -18,14 +18,14 @@
   <p><code>examples/hello-cljc</code> is three namespaces of plain jank. No Zig or JVM is involved.</p>
   <figure class="block">
     <figcaption>src/hello/math.jank</figcaption>
-    <pre>(ns hello.math)
+    <pre data-lang="clojure">(ns hello.math)
 
 (defn weighted [values]
   (reduce + 0 (map-indexed (fn [index value] (* (inc index) value)) values)))</pre>
   </figure>
   <figure class="block">
     <figcaption>src/hello/core.jank</figcaption>
-    <pre>(defn -main [&amp; _]
+    <pre data-lang="clojure">(defn -main [&amp; _]
   (platform/announce)
   (assert (= 0 (math/weighted [])))
   (let [answer (math/weighted [1 2 3 4])]

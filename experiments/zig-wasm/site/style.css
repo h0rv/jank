@@ -18,6 +18,13 @@ p code, td code, li code { background: var(--code); padding: 1px 4px; border-rad
 .block figcaption { display: flex; justify-content: space-between; gap: 12px; padding: 6px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: .8rem; }
 pre { margin: 0; padding: 12px 14px; overflow-x: auto; line-height: 1.55; }
 #app, #stdout { white-space: pre-wrap; overflow-wrap: anywhere; }
+a-k, a-kc, a-kd, a-kf, a-ki, a-kr { color: #c14a4a; }
+a-s { color: #4c7a5d; }
+a-n, a-cb { color: #945e80; }
+a-co, a-o { color: #b47109; }
+a-f, a-fb, a-fm { color: #6c782e; }
+a-pr, a-at { color: #45707a; }
+a-c { color: #928374; font-style: italic; }
 .output { background: #fff; }
 #app { min-height: 5.5em; }
 #status { font-family: ui-monospace, Menlo, monospace; }

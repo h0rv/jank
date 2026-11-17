@@ -1,34 +1,72 @@
-// AI-assisted runner for the ahead-of-time hello-cljc example.
-const diagnostics = document.getElementById('stdout');
+// AI-assisted runner: keeps the compiled live-demo module running and starts prime counts.
+const form = document.getElementById('run-form');
+const input = document.getElementById('input');
+const run = document.getElementById('run');
+const result = document.getElementById('result');
 const status = document.getElementById('status');
-function finish(ok, message) {
-  document.documentElement.dataset.status = ok ? 'pass' : 'fail';
+const stats = document.getElementById('stats');
+const diagnostics = document.getElementById('stdout');
+let module = null;
+let startedAt = 0;
+let shownAt = -Infinity;
+
+function finish(state, message) {
+  document.documentElement.dataset.status = state;
   status.textContent = message;
-  document.title = `jank-wasm · ${ok ? 'PASS' : 'FAIL'}`;
 }
 function fail(reason) {
   diagnostics.textContent += `${reason}\n`;
-  finish(false, 'failed, see runtime log');
+  run.disabled = true;
+  finish('fail', 'failed, see runtime log');
 }
+function start() {
+  if (!module) return;
+  startedAt = performance.now();
+  result.textContent = '';
+  finish('running', 'running');
+  run.textContent = 'Run again';
+  module.liveInput = input.value.trim();
+}
+function append(line) {
+  result.textContent += `${line}\n`;
+  result.scrollTop = result.scrollHeight;
+}
+
 window.addEventListener('error', event => fail(event.message));
 window.addEventListener('unhandledrejection', event => fail(event.reason));
-var Module = {
+
+const options = {
   arguments: ['static-roots'],
+  jankCollectEvery: 30,
   print: line => { diagnostics.textContent += `${line}\n`; },
   printErr: line => { diagnostics.textContent += `${line}\n`; },
   onAbort: fail,
-  onExit: code => {
-    const lines = document.getElementById('app').textContent.split('\n');
-    const ok = code === 0 && ['platform: browser', 'weighted buffer: 30',
-      'hello: checks passed'].every(line => lines.includes(line));
-    finish(ok, ok ? 'exit 0, checks passed' : 'failed, see runtime log');
+  onLiveLine: append,
+  onLiveFinish: line => {
+    append(line);
+    finish('pass', `done in ${Math.round(performance.now() - startedAt)} ms`);
+  },
+  onJankFrame: frame => {
+    const now = performance.now();
+    if (now - shownAt < 250) return;
+    shownAt = now;
+    stats.textContent = `Running: frame ${frame.frames}, ${frame.collections} garbage collections, ` +
+      `${(frame.used / 1048576).toFixed(1)} MiB of ${(frame.heap / 1048576).toFixed(1)} MiB GC heap in use.`;
   }
 };
+
+form.addEventListener('submit', event => { event.preventDefault(); start(); });
+
 if (typeof WebAssembly === 'undefined') {
   fail('WebAssembly is unavailable in this browser.');
 } else {
   const script = document.createElement('script');
-  script.src = 'hello.js';
-  script.onerror = () => fail('Could not load hello.js. Serve all site files together over HTTP.');
+  script.src = 'live.js';
+  script.onerror = () => fail('Could not load live.js. Serve all site files together over HTTP.');
+  script.onload = () => createLive(options).then(instance => {
+    module = instance;
+    run.disabled = false;
+    start();
+  }, fail);
   document.body.appendChild(script);
 }

@@ -7,12 +7,11 @@
 <link rel="stylesheet" href="style.css">
 <header class="bar">
   <a class="name" href="index.html">jank-wasm</a>
-  <nav><a href="try.html">Build</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Notes</a><a href="https://github.com/h0rv/jank-wasm">GitHub</a></nav>
+  <nav><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md#one-command-native--wasm">Build</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Notes</a><a href="https://github.com/h0rv/jank-wasm">GitHub</a></nav>
 </header>
 <main>
   <h1>jank-wasm</h1>
   <p>A research fork of <a href="https://github.com/jank-lang/jank">jank</a> that compiles Clojure ahead of time to WebAssembly.</p>
-  <p>The program below was compiled to wasm64 with Emscripten before this page was published. Your browser runs the compiled module; there is no REPL or eval here.</p>
 
   <h2>Pac-Man</h2>
   <p>A raylib game compiled from the same jank source for native and wasm64.</p>
@@ -32,31 +31,36 @@
   </figure>
 
   <h2>Live example</h2>
-  <p><code>examples/hello-cljc</code> is three namespaces of plain jank. No Zig or JVM is involved.</p>
+  <p>Press Run. The compiled jank module running in this tab counts primes below the number you give it, 4,000 candidates per animation frame, and prints a line after each chunk. Run it again with another number at any time.</p>
   <figure class="block">
-    <figcaption>src/hello/math.jank</figcaption>
-    <pre data-lang="clojure">(ns hello.math)
+    <figcaption>examples/live-demo/src/live/core.jank</figcaption>
+    <pre data-lang="clojure">(defn prime? [n]
+  (and (&gt; n 1)
+       (loop [d 2]
+         (cond
+           (&gt; (* d d) n) true
+           (zero? (rem n d)) false
+           :else (recur (inc d))))))
 
-(defn weighted [values]
-  (reduce + 0 (map-indexed (fn [index value] (* (inc index) value)) values)))</pre>
+(defn step [{:keys [from limit found]}]
+  (let [to (min limit (+ from chunk-size))]
+    {:from to
+     :limit limit
+     :found (+ found (count (filter prime? (range from to))))}))</pre>
   </figure>
-  <figure class="block">
-    <figcaption>src/hello/core.jank</figcaption>
-    <pre data-lang="clojure">(defn -main [&amp; _]
-  (platform/announce)
-  (assert (= 0 (math/weighted [])))
-  (let [answer (math/weighted [1 2 3 4])]
-    (assert (= 30 answer))
-    (platform/emit (str "weighted buffer: " answer)))
-  (platform/emit "hello: checks passed"))</pre>
-  </figure>
+  <form class="input" id="run-form">
+    <label for="input">Count primes below</label>
+    <input id="input" type="text" inputmode="numeric" value="200000" autocomplete="off" spellcheck="false">
+    <button id="run" type="submit" disabled>Run</button>
+  </form>
   <figure class="block output" aria-label="Live example output">
-    <figcaption><span>Output</span><span id="status" role="status">Loading hello.wasm</span></figcaption>
-    <pre id="app" aria-live="polite"></pre>
+    <figcaption><span>output</span><span id="status" role="status">loading live.wasm</span></figcaption>
+    <pre id="result" aria-live="polite"></pre>
     <details><summary>Runtime log</summary><pre id="stdout"></pre></details>
   </figure>
+  <p class="note" id="stats">The module has not started yet.</p>
   <noscript><p>The example needs JavaScript and a browser with memory64.</p></noscript>
-  <p class="note">Needs memory64 and Wasm exceptions. Tested in Chrome 156; Safari probably will not run it. <a href="try.html">Build it yourself</a>.</p>
+  <p class="note">The module was compiled ahead of time from jank with Emscripten; there is no REPL or eval. It needs memory64 and Wasm exceptions: Chrome 156 runs it, Safari probably will not. To build it yourself, see the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md#one-command-native--wasm">build notes</a>.</p>
 
   <h2>Status</h2>
   <table>

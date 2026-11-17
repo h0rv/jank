@@ -1,0 +1,46 @@
+;; AI-assisted interactive demo: a prime count that advances one chunk per frame.
+(ns live.core
+  (:require [live.page :as page]))
+
+(def chunk-size 4000)
+
+(defn prime? [n]
+  (and (> n 1)
+       (loop [d 2]
+         (cond
+           (> (* d d) n) true
+           (zero? (rem n d)) false
+           :else (recur (inc d))))))
+
+(defn step [{:keys [from limit found]}]
+  (let [to (min limit (+ from chunk-size))]
+    {:from to
+     :limit limit
+     :found (+ found (count (filter prime? (range from to))))}))
+
+(def job (atom nil))
+
+(defn start [text]
+  (let [limit (parse-long text)]
+    (reset! job (when (and limit (< 0 limit 3000001))
+                  {:from 0 :limit limit :found 0}))
+    (when-not @job
+      (page/finish "enter a whole number from 1 to 3000000"))))
+
+(defn frame []
+  (when-let [text (page/take-input)]
+    (start text))
+  (when-let [state @job]
+    (let [{:keys [from limit found] :as next} (step state)]
+      (page/show (str "checked " from " of " limit ", " found " primes so far"))
+      (if (< from limit)
+        (reset! job next)
+        (do (reset! job nil)
+            (page/finish (str found " primes below " limit)))))))
+
+(defn -main [& _]
+  (loop [state (step {:from 0 :limit 20000 :found 0})]
+    (if (< (:from state) (:limit state))
+      (recur (step state))
+      (println (:found state) "primes below 20000")))
+  (println "live: ready"))

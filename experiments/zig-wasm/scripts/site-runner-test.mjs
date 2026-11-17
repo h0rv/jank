@@ -1,4 +1,4 @@
-// AI-assisted tests for the static AOT demo's completion and error states.
+// AI-assisted tests for the live demo and Pac-Man runners' output and error states.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
@@ -6,7 +6,77 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../site/runner.js', import.meta.url), 'utf8');
 const gameSource = readFileSync(new URL('../site/pacman-runner.js', import.meta.url), 'utf8');
-function runner({ output = '', wasm = true, game = false } = {}) {
+function runner({ wasm = true } = {}) {
+  const elements = Object.fromEntries(['run-form', 'input', 'run', 'result', 'status', 'stats', 'stdout'].map(id =>
+    [id, { textContent: '', value: ' 100 ', disabled: true, scrollTop: 0, scrollHeight: 0,
+      addEventListener(name, callback) { this[`on${name}`] = callback; } }]));
+  const listeners = {};
+  const scripts = [];
+  const document = {
+    documentElement: { dataset: { status: 'running' } },
+    getElementById: id => elements[id],
+    createElement: () => ({}),
+    body: { appendChild: script => scripts.push(script) }
+  };
+  const created = [];
+  const context = vm.createContext({ document, performance: { now: () => 0 },
+    WebAssembly: wasm ? {} : undefined,
+    createLive: options => { const instance = {}; created.push({ options, instance });
+      return Promise.resolve(instance); },
+    window: { addEventListener: (name, callback) => { listeners[name] = callback; } } });
+  vm.runInContext(source, context);
+  return { document, elements, listeners, scripts, created };
+}
+
+test('starts a run on load, streams lines and reruns on submit', async () => {
+  const page = runner();
+  assert.equal(page.scripts[0].src, 'live.js');
+  page.scripts[0].onload();
+  await new Promise(resolve => setImmediate(resolve));
+  const { options, instance } = page.created[0];
+  assert.equal(options.arguments[0], 'static-roots');
+  assert.equal(page.elements.run.disabled, false);
+  assert.equal(instance.liveInput, '100');
+  assert.equal(page.document.documentElement.dataset.status, 'running');
+  options.onLiveLine('checked 100 of 200, 25 primes so far');
+  options.onLiveFinish('46 primes below 200');
+  assert.equal(page.elements.result.textContent,
+    'checked 100 of 200, 25 primes so far\n46 primes below 200\n');
+  assert.equal(page.document.documentElement.dataset.status, 'pass');
+  instance.liveInput = null;
+  page.elements.input.value = '50';
+  let prevented = false;
+  page.elements['run-form'].onsubmit({ preventDefault: () => { prevented = true; } });
+  assert.ok(prevented);
+  assert.equal(instance.liveInput, '50');
+  assert.equal(page.elements.result.textContent, '');
+  assert.equal(page.elements.run.textContent, 'Run again');
+  options.onJankFrame({ frames: 9, collections: 2, used: 1048576, heap: 2097152 });
+  assert.match(page.elements.stats.textContent, /frame 9, 2 garbage collections/);
+});
+
+test('missing WebAssembly and load errors give visible diagnostics', () => {
+  const missing = runner({ wasm: false });
+  assert.equal(missing.scripts.length, 0);
+  assert.match(missing.elements.stdout.textContent, /WebAssembly is unavailable/);
+  assert.equal(missing.document.documentElement.dataset.status, 'fail');
+  const page = runner();
+  page.scripts[0].onerror();
+  assert.match(page.elements.stdout.textContent, /Could not load live.js/);
+});
+
+test('abort, runtime errors and rejected promises fail visibly', () => {
+  for (const trigger of [page => { page.scripts[0].onload(); page.created[0].options.onAbort('abort'); },
+    page => page.listeners.error({ message: 'runtime error' }),
+    page => page.listeners.unhandledrejection({ reason: 'rejection' })]) {
+    const page = runner();
+    trigger(page);
+    assert.equal(page.document.documentElement.dataset.status, 'fail');
+    assert.notEqual(page.elements.stdout.textContent, '');
+  }
+});
+
+function gameRunner({ output = '', wasm = true } = {}) {
   const elements = Object.fromEntries(['stdout', 'status', 'app', 'canvas', 'game-message'].map(id => [id, { textContent: '' }]));
   const canvasListeners = {};
   elements.canvas.addEventListener = (name, callback) => { canvasListeners[name] = callback; };
@@ -22,50 +92,13 @@ function runner({ output = '', wasm = true, game = false } = {}) {
   };
   const context = vm.createContext({ document, WebAssembly: wasm ? {} : undefined,
     window: { addEventListener: (name, callback) => { listeners[name] = callback; } } });
-  vm.runInContext(game ? gameSource : source, context);
+  vm.runInContext(gameSource, context);
   return { context, document, elements, listeners, scripts, canvasListeners };
 }
 
-test('requires successful exit and all live example output', () => {
-  const page = runner({ output: 'platform: browser\nweighted buffer: 30\nhello: checks passed\n' });
-  assert.equal(page.scripts[0].src, 'hello.js');
-  assert.equal(page.context.Module.arguments[0], 'static-roots');
-  page.context.Module.onExit(0);
-  assert.equal(page.document.documentElement.dataset.status, 'pass');
-});
-
-test('empty or incomplete output and nonzero exit fail', () => {
-  for (const [output, exit] of [['', 0], ['hello: checks passed', 0],
-    ['platform: browser\nweighted buffer: 30\nhello: checks passed', 1]]) {
-    const page = runner({ output });
-    page.context.Module.onExit(exit);
-    assert.equal(page.document.documentElement.dataset.status, 'fail');
-  }
-});
-
-test('missing WebAssembly and load errors give visible diagnostics', () => {
-  const missing = runner({ wasm: false });
-  assert.equal(missing.scripts.length, 0);
-  assert.match(missing.elements.stdout.textContent, /WebAssembly is unavailable/);
-  assert.equal(missing.document.documentElement.dataset.status, 'fail');
-  const page = runner();
-  page.scripts[0].onerror();
-  assert.match(page.elements.stdout.textContent, /Could not load hello.js/);
-});
-
-test('abort, runtime errors and rejected promises fail visibly', () => {
-  for (const trigger of [page => page.context.Module.onAbort('abort'),
-    page => page.listeners.error({ message: 'runtime error' }),
-    page => page.listeners.unhandledrejection({ reason: 'rejection' })]) {
-    const page = runner();
-    trigger(page);
-    assert.equal(page.document.documentElement.dataset.status, 'fail');
-    assert.notEqual(page.elements.stdout.textContent, '');
-  }
-});
 
 test('Pac-Man requires both markers and a rendered frame', () => {
-  const page = runner({ game: true });
+  const page = gameRunner();
   assert.equal(page.scripts[0].src, 'pacman.js');
   assert.equal(page.context.Module.canvas, page.elements.canvas);
   page.context.Module.print('pacman: rules passed');
@@ -81,18 +114,18 @@ test('Pac-Man requires both markers and a rendered frame', () => {
 
 test('Pac-Man missing markers, unavailable Wasm and load failures fail visibly', () => {
   for (const lines of [[], ['pacman: initialized']]) {
-    const page = runner({ game: true });
+    const page = gameRunner();
     lines.forEach(page.context.Module.print);
     page.context.Module.onJankFrame({ frames: 1 });
     assert.equal(page.document.documentElement.dataset.status, 'fail');
     assert.match(page.elements.stdout.textContent, /Missing game initialization markers/);
   }
-  const missing = runner({ game: true, wasm: false });
+  const missing = gameRunner({ wasm: false });
   assert.equal(missing.scripts.length, 0);
   assert.match(missing.elements.stdout.textContent, /WebAssembly is unavailable/);
   assert.equal(missing.elements['game-message'].hidden, false);
   assert.match(missing.elements['game-message'].textContent, /Could not run the game/);
-  const page = runner({ game: true });
+  const page = gameRunner();
   page.scripts[0].onerror();
   assert.match(page.elements.stdout.textContent, /Could not load pacman.js/);
 });
@@ -102,7 +135,7 @@ test('Pac-Man runtime failures stay failed after subsequent frames', () => {
     page => page.context.Module.onExit(0),
     page => page.listeners.error({ message: 'runtime error' }),
     page => page.listeners.unhandledrejection({ reason: 'rejection' })]) {
-    const page = runner({ game: true });
+    const page = gameRunner();
     trigger(page);
     page.context.Module.print('pacman: rules passed');
     page.context.Module.print('pacman: initialized');
@@ -113,7 +146,7 @@ test('Pac-Man runtime failures stay failed after subsequent frames', () => {
 });
 
 test('Pac-Man click focuses canvas and only arrow keys prevent page scrolling', () => {
-  const page = runner({ game: true });
+  const page = gameRunner();
   page.canvasListeners.click();
   assert.equal(page.elements.canvas.focused, true);
   for (const code of ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab']) {

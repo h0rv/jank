@@ -37,7 +37,7 @@ namespace jank::runtime
     auto const file(module::loader::read_file(path));
     if(file.is_err())
     {
-      throw file.expect_err();
+      jank::throw_error(file.expect_err());
     }
 
     binding_scope const preserve{ obj::persistent_hash_map::create_unique(
@@ -122,7 +122,7 @@ namespace jank::runtime
       auto const write_res{ write_module(module_name, code) };
       if(write_res.is_err())
       {
-        throw error::codegen_internal_failure(write_res.expect_err());
+        jank::throw_error(error::codegen_internal_failure(write_res.expect_err()));
       }
     }
 
@@ -203,7 +203,7 @@ namespace jank::runtime
     auto const file(module::loader::read_file(file_path));
     if(file.is_err())
     {
-      throw file.expect_err();
+      jank::throw_error(file.expect_err());
     }
 
     return read_string(file.expect_ok().data(), reader_opts, std::numeric_limits<u64>::max());

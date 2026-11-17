@@ -557,11 +557,11 @@ extern "C"
     auto const op_box{ try_object<obj::opaque_box>(box_obj) };
     if(!op_box->canonical_type.empty() && op_box->canonical_type != type)
     {
-      throw error::runtime_invalid_unbox(
+      jank::throw_error(error::runtime_invalid_unbox(
         util::format("This opaque box holds a `{}`, but it was unboxed as a `{}`.",
                      op_box->canonical_type,
                      type),
-        object_source(op_box));
+        object_source(op_box)));
     }
 
     return op_box->data;
@@ -576,12 +576,12 @@ extern "C"
     auto const op_box{ try_object<obj::opaque_box>(box_obj) };
     if(!op_box->canonical_type.empty() && op_box->canonical_type != type)
     {
-      throw error::runtime_invalid_unbox(
+      jank::throw_error(error::runtime_invalid_unbox(
         util::format("This opaque box holds a `{}`, but it was unboxed as a `{}`.",
                      op_box->canonical_type,
                      type),
         meta_source(source_obj),
-        object_source(op_box));
+        object_source(op_box)));
     }
 
     return op_box->data;
@@ -595,12 +595,12 @@ extern "C"
     auto const op_box{ try_object<obj::opaque_box>(box_obj) };
     if(!op_box->canonical_type.empty() && op_box->canonical_type != type)
     {
-      throw error::runtime_invalid_unbox(
+      jank::throw_error(error::runtime_invalid_unbox(
         util::format("This opaque box holds a `{}`, but it was unboxed as a `{}`.",
                      op_box->canonical_type,
                      type),
         meta_source(__rt_ctx->read_string(source)),
-        object_source(op_box));
+        object_source(op_box)));
     }
 
     return op_box->data;
@@ -1062,7 +1062,7 @@ extern "C"
 
   void jank_throw(jank_object_ref const o)
   {
-    throw runtime::object_ref{ reinterpret_cast<object *>(o) };
+    runtime::throw_object(runtime::object_ref{ reinterpret_cast<object *>(o) });
   }
 
   void jank_profile_enter(char const * const label)

@@ -7,6 +7,17 @@ TEST_SUITE("analyze/cpp_util")
 {
   using namespace jank::analyze;
 
+  TEST_CASE("is_error_ref recognizes aliases and cv qualifiers")
+  {
+    auto const type{ cppinterop::get_type_from_scope(
+      cpp_util::resolve_scope("jank.error_ref").expect_ok()) };
+    REQUIRE(type);
+    CHECK(cpp_util::is_error_ref(type));
+    CHECK(cpp_util::is_error_ref(cppinterop::get_type_with_const(type)));
+    CHECK_FALSE(cpp_util::is_error_ref(cpp_util::untyped_object_ref_type()));
+    CHECK_FALSE(cpp_util::is_error_ref(cpp_util::int_type()));
+  }
+
   TEST_CASE("resolve_candidates orders candidates by relevance")
   {
     jank::runtime::__rt_ctx

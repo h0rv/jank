@@ -2,9 +2,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <typeinfo>
+#include <exception>
 #include <jank/c_api.h>
+#include <jank/error.hpp>
 #include <jank/runtime/core.hpp>
+#include <jank/runtime/throw.hpp>
 #include <jank/runtime/obj/persistent_hash_map.hpp>
 #include <jank/runtime/obj/persistent_string.hpp>
 #include <jank/runtime/obj/persistent_vector.hpp>
@@ -13,24 +15,6 @@
 #ifdef __EMSCRIPTEN__
 #include <emscripten/stack.h>
 extern "C" char __global_base, __data_end;
-#endif
-
-#ifdef GC_ROOTS_EXCEPTION_STORAGE
-#ifdef __EMSCRIPTEN__
-using exception_destructor = void *(*)(void *);
-#else
-using exception_destructor = void (*)(void *);
-#endif
-extern "C" [[noreturn]] void __real___cxa_throw(void *, std::type_info *, exception_destructor);
-extern "C" [[noreturn]] void __wrap___cxa_throw(void *storage, std::type_info *type,
-                                               exception_destructor destructor)
-{
-  if(*type == typeid(jank::runtime::object_ref))
-  {
-    GC_add_roots(storage, static_cast<char *>(storage) + sizeof(jank::runtime::object_ref));
-  }
-  __real___cxa_throw(storage, type, destructor);
-}
 #endif
 
 namespace
@@ -244,17 +228,6 @@ namespace
     else { throw 42; }
   }
 
-  struct exception_storage_guard
-  {
-    object_ref const *slot;
-    ~exception_storage_guard()
-    {
-#ifdef GC_ROOTS_EXCEPTION_STORAGE
-      GC_remove_roots(const_cast<object_ref *>(slot), const_cast<object_ref *>(slot + 1));
-#endif
-    }
-  };
-
   [[gnu::noinline]] bool exception_local()
   {
     size_t const begin{ used };
@@ -285,20 +258,182 @@ namespace
     try { unwind_frames(3, true); }
     catch(object_ref const &value)
     {
-      exception_storage_guard guard{ &value };
       churn();
       bool const ok{ unwind_collections >= 4 && unwind_retained && check(begin, used, value) };
-      std::printf("EXCEPTION payload: unwind-collections=%zu retained-during-unwind=%d storage-roots=%d\n",
-                  unwind_collections, unwind_retained,
-#ifdef GC_ROOTS_EXCEPTION_STORAGE
-                  1
-#else
-                  0
-#endif
-      );
+      std::printf(
+        "EXCEPTION payload: unwind-collections=%zu retained-during-unwind=%d runtime-rooted=1\n",
+        unwind_collections,
+        unwind_retained);
       return ok;
     }
     return false;
+  }
+
+  [[gnu::noinline]]
+  void rethrow_payload()
+  {
+    collecting_destructor guard;
+    try
+    {
+      unwind_frames(3, true);
+    }
+    catch(object_ref const &)
+    {
+      churn();
+      unwind_retained &= live(unwind_watch_begin, used);
+      throw;
+    }
+  }
+
+  [[gnu::noinline]]
+  bool exception_rethrow()
+  {
+    size_t const begin{ used };
+    unwind_collections = 0;
+    unwind_watch_begin = begin;
+    unwind_retained = true;
+    try
+    {
+      rethrow_payload();
+    }
+    catch(object_ref const &value)
+    {
+      churn();
+      return unwind_collections >= 5 && unwind_retained && check(begin, used, value);
+    }
+    return false;
+  }
+
+  [[gnu::noinline]]
+  std::exception_ptr capture_payload()
+  {
+    try
+    {
+      unwind_frames(3, true);
+    }
+    catch(object_ref const &)
+    {
+      return std::current_exception();
+    }
+    return {};
+  }
+
+  [[gnu::noinline]]
+  bool retain_exception_ptr(size_t const begin)
+  {
+    auto saved{ capture_payload() };
+    auto copy{ saved };
+    saved = {};
+    churn();
+    if(!unwind_retained || !live(begin, used))
+    {
+      return false;
+    }
+    try
+    {
+      std::rethrow_exception(copy);
+    }
+    catch(object_ref const &value)
+    {
+      churn();
+      return unwind_collections >= 4 && check(begin, used, value);
+    }
+    return false;
+  }
+
+  [[gnu::noinline]]
+  bool exception_ptr()
+  {
+    size_t const begin{ used };
+    unwind_collections = 0;
+    unwind_watch_begin = begin;
+    unwind_retained = true;
+    if(!retain_exception_ptr(begin))
+    {
+      return false;
+    }
+    for(int i{}; i < 32 && links[begin]; ++i)
+    {
+      churn();
+    }
+    return links[begin] == nullptr;
+  }
+
+  [[gnu::noinline]]
+  void error_payload()
+  {
+    auto const value{ jank::make_error(jank::error::kind::runtime_uncaught_exception,
+                                       jank::read::source::unknown()) };
+    if(used == capacity)
+    {
+      std::abort();
+    }
+    links[used] = reinterpret_cast<void *>(GC_HIDE_POINTER(value.get()));
+    if(GC_general_register_disappearing_link(&links[used++], value.get()) != GC_SUCCESS)
+    {
+      std::abort();
+    }
+    jank::throw_error(value);
+  }
+
+  [[gnu::noinline]]
+  void unwind_error()
+  {
+    collecting_destructor guard;
+    error_payload();
+  }
+
+  [[gnu::noinline]]
+  std::exception_ptr capture_error()
+  {
+    try
+    {
+      unwind_error();
+    }
+    catch(jank::error_ref const &)
+    {
+      return std::current_exception();
+    }
+    return {};
+  }
+
+  [[gnu::noinline]]
+  bool retain_error(size_t const begin)
+  {
+    auto saved{ capture_error() };
+    churn();
+    if(!unwind_retained || !live(begin, used))
+    {
+      return false;
+    }
+    try
+    {
+      std::rethrow_exception(saved);
+    }
+    catch(jank::error_ref const &value)
+    {
+      churn();
+      return live(begin, used) && value->kind == jank::error::kind::runtime_uncaught_exception;
+    }
+    return false;
+  }
+
+  [[gnu::noinline]]
+  bool exception_error()
+  {
+    size_t const begin{ used };
+    unwind_collections = 0;
+    unwind_watch_begin = begin;
+    unwind_retained = true;
+    if(!retain_error(begin))
+    {
+      return false;
+    }
+    for(int i{}; i < 32 && links[begin]; ++i)
+    {
+      churn();
+    }
+    return unwind_collections >= 1 && links[begin] == nullptr;
   }
 
   [[gnu::noinline]] uintptr_t stack_pointer()
@@ -445,15 +580,29 @@ int main(int argc, char **argv)
 #ifdef GC_ROOTS_SHADOW
   GC_add_roots(slots, slots + 128);
 #endif
-  struct test { char const *name; bool (*run)(); };
-  test const tests[]{ { "locals", locals }, { "nested", [] { return nested(31); } },
-                      { "temporary", [] { size_t const begin{ used }; return temporary(fixture(), begin); } },
-                      { "operand", operand }, { "exception-local", exception_local },
-                      { "exception-payload", exception_payload }, { "exception-stack", exception_stack },
-                      { "runtime-internal", runtime_internal },
-                      { "registered-global", [] { return globals(true); } },
-                      { "unregistered-global", [] { return globals(false); } },
-                      { "reclaim-control", reclaim } };
+  struct test { char const *name; bool (*run)();
+  };
+
+  test const tests[]{
+    {              "locals",locals                            },
+    {              "nested",     [] { return nested(31); } },
+    {           "temporary",
+     [] {
+     size_t const begin{ used };
+     return temporary(fixture(), begin);
+     }                                                    },
+    {             "operand",                       operand },
+    {     "exception-local",               exception_local },
+    {   "exception-payload",             exception_payload },
+    {     "exception-stack",               exception_stack },
+    {   "exception-rethrow",             exception_rethrow },
+    {       "exception-ptr",                 exception_ptr },
+    {     "exception-error",               exception_error },
+    {    "runtime-internal",              runtime_internal },
+    {   "registered-global",  [] { return globals(true); } },
+    { "unregistered-global", [] { return globals(false); } },
+    {     "reclaim-control",                       reclaim }
+  };
   int passed{}, failed{};
   for(auto const &test : tests)
   {

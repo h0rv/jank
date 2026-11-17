@@ -11,6 +11,7 @@
 #include <jank/runtime/core/meta.hpp>
 #include <jank/runtime/core/call.hpp>
 #include <jank/runtime/core.hpp>
+#include <jank/runtime/throw.hpp>
 #include <jank/codegen/api.hpp>
 #include <jank/util/scope_exit.hpp>
 #include <jank/c_api.h>

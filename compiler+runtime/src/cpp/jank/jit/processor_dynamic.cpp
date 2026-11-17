@@ -183,7 +183,7 @@ namespace jank::jit
     auto const clang_path_str{ util::find_clang() };
     if(clang_path_str.is_none())
     {
-      throw error::system_clang_executable_not_found();
+      jank::throw_error(error::system_clang_executable_not_found());
     }
     auto const clang_dir{ std::filesystem::path{ clang_path_str.unwrap().c_str() }.parent_path() };
 
@@ -205,8 +205,8 @@ namespace jank::jit
     auto const clang_resource_dir{ util::find_clang_resource_dir() };
     if(clang_resource_dir.is_none())
     {
-      throw error::system_failure(
-        util::format("Unable to find Clang {} resource dir.", JANK_CLANG_MAJOR_VERSION));
+      jank::throw_error(error::system_failure(
+        util::format("Unable to find Clang {} resource dir.", JANK_CLANG_MAJOR_VERSION)));
     }
     args.emplace_back("-resource-dir");
     args.emplace_back(clang_resource_dir.unwrap().c_str());
@@ -250,7 +250,7 @@ namespace jank::jit
       auto const res{ util::build_pch(pch_build_args, binary_version) };
       if(res.is_err())
       {
-        throw res.expect_err();
+        jank::throw_error(res.expect_err());
       }
       pch_path = res.expect_ok();
     }
@@ -343,17 +343,17 @@ namespace jank::jit
       std::filesystem::remove(stale_pch_path, remove_error);
       if(remove_error)
       {
-        throw error::system_failure(
+        jank::throw_error(error::system_failure(
           util::format("The stale pre-compiled header at `{}` could not be removed, but jank needs "
                        "to rebuild a new one. The system error provided is: {}",
                        stale_pch_path.string(),
-                       remove_error.message()));
+                       remove_error.message())));
       }
 
       auto const rebuilt_pch{ util::build_pch(pch_build_args, binary_version) };
       if(rebuilt_pch.is_err())
       {
-        throw rebuilt_pch.expect_err();
+        jank::throw_error(rebuilt_pch.expect_err());
       }
 
       created_interpreter = create_interpreter();
@@ -361,9 +361,9 @@ namespace jank::jit
 
     if(created_interpreter == nullptr)
     {
-      throw error::system_failure(
+      jank::throw_error(error::system_failure(
         "The JIT runtime failed to initialize. Clang most likely has printed some error "
-        "diagnostics. Consider running `jank check-health` and reporting this issue.");
+        "diagnostics. Consider running `jank check-health` and reporting this issue."));
     }
 
     /* We need to include our special runtime PCH. */
@@ -440,7 +440,7 @@ namespace jank::jit
     auto const &load_result{ load_libs(util::cli::opts.libs) };
     if(load_result.is_err())
     {
-      throw error::system_failure(load_result.expect_err().c_str());
+      jank::throw_error(error::system_failure(load_result.expect_err().c_str()));
     }
   }
 
@@ -524,7 +524,8 @@ namespace jank::jit
               find_symbol(util::format("{}_10", base_name)).expect_ok());
             break;
           default:
-            throw error::runtime_internal_failure(util::format("Unsupported arity {}.", arity));
+            jank::throw_error(
+              error::runtime_internal_failure(util::format("Unsupported arity {}.", arity)));
         }
       }
 
@@ -582,7 +583,8 @@ namespace jank::jit
               find_symbol(util::format("{}_10", base_name)).expect_ok());
             break;
           default:
-            throw error::runtime_internal_failure(util::format("Unsupported arity {}.", arity));
+            jank::throw_error(
+              error::runtime_internal_failure(util::format("Unsupported arity {}.", arity)));
         }
       }
 
@@ -611,7 +613,7 @@ namespace jank::jit
     if(err)
     {
       llvm::logAllUnhandledErrors(jtl::move(err), llvm::errs(), "error: ");
-      throw error::codegen_internal_failure("Unable to compile C++ source.");
+      jank::throw_error(error::codegen_internal_failure("Unable to compile C++ source."));
     }
   }
 

@@ -1,3 +1,4 @@
+#include <jank/runtime/throw.hpp>
 #include <jank/runtime/obj/future.hpp>
 #include <jank/runtime/core/make_box.hpp>
 #include <jank/util/fmt.hpp>
@@ -25,7 +26,7 @@ namespace jank::runtime::obj
     jank_debug_assert(locked_state->status != future_status::running);
     if(locked_state->error.is_some())
     {
-      throw locked_state->error.unwrap();
+      jank::runtime::throw_object(locked_state->error.unwrap());
     }
 
     return locked_state->result;

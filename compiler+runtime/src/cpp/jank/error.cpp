@@ -8,6 +8,14 @@
 #include <jank/runtime/core/to_string.hpp>
 #include <jank/runtime/obj/keyword.hpp>
 
+namespace jank
+{
+  void throw_error(error_ref const value)
+  {
+    throw thrown_error{ value };
+  }
+}
+
 namespace jank::error
 {
   static constexpr auto default_note_message{ "Found here." };
@@ -779,7 +787,7 @@ namespace jank::error
 
   void throw_internal_failure(jtl::immutable_string const &message)
   {
-    throw internal_failure(message);
+    jank::throw_error(internal_failure(message));
   }
 
   void throw_result_failure(jtl::immutable_string const &message)
@@ -788,6 +796,6 @@ namespace jank::error
 #ifndef __EMSCRIPTEN__
     e->trace = std::make_unique<cpptrace::raw_trace>(cpptrace::generate_raw_trace());
 #endif
-    throw e;
+    jank::throw_error(e);
   }
 }

@@ -1,3 +1,4 @@
+#include <jank/runtime/throw.hpp>
 #include <cctype>
 #include <filesystem>
 #include <fstream>
@@ -300,7 +301,7 @@ namespace jank::terminal_repl
 
     if(repl_init_err.is_some())
     {
-      throw repl_init_err;
+      jank::runtime::throw_object(repl_init_err);
     }
 
     while(true)

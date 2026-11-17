@@ -5,6 +5,7 @@
 #include <jtl/option.hpp>
 
 #include <jank/runtime/object.hpp>
+#include <jank/runtime/throw.hpp>
 #include <jank/read/source.hpp>
 
 /* NOLINTNEXTLINE(modernize-concat-nested-namespaces): Not doable, due to the inline. */

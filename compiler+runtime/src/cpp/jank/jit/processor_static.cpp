@@ -11,7 +11,7 @@ namespace jank::jit
 
   void processor::eval_string(jtl::immutable_string const &) const
   {
-    throw error::runtime_static_feature_disabled("eval");
+    jank::throw_error(error::runtime_static_feature_disabled("eval"));
   }
 
   runtime::object_ref processor::create_function(runtime::callable_arity_flags const,
@@ -19,6 +19,6 @@ namespace jank::jit
                                                  native_vector<u8> const &,
                                                  bool const) const
   {
-    throw error::runtime_static_feature_disabled("eval");
+    jank::throw_error(error::runtime_static_feature_disabled("eval"));
   }
 }

@@ -1,3 +1,4 @@
+#include <jank/runtime/throw.hpp>
 #include <iostream>
 #include <locale>
 #include <sstream>
@@ -25,7 +26,7 @@ namespace jank::runtime::obj
    */
   static inst_time_point inst_from_string(jtl::immutable_string const &)
   {
-    throw make_box("'#inst' parsing not currently supported.").erase();
+    jank::runtime::throw_object(make_box("'#inst' parsing not currently supported.").erase());
   }
 #else
   static inst_time_point inst_from_string(jtl::immutable_string const &s)
@@ -50,7 +51,8 @@ namespace jank::runtime::obj
 
     if(!parsed)
     {
-      throw make_box(util::format("Unrecognized date/time syntax: {}", s)).erase();
+      jank::runtime::throw_object(
+        make_box(util::format("Unrecognized date/time syntax: {}", s)).erase());
     }
 
     return o;

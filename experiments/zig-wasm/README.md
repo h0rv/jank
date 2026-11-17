@@ -24,7 +24,7 @@ The original baseline uses an installed jank compiler for host code generation a
 | The same module compiles to wasm32-WASI. | Failed on pointer width, platform guards and C++ threading dependencies. |
 | Newer Boehm collects on wasm64 with an explicit registered root. | Smoke passed through 32 forced collections. |
 | Newer Boehm discovers local roots with Asyncify. | Current smoke passes, but earlier variants lost live objects. Unresolved. |
-| Tagged-reference lifetime cases against the real jank runtime archive. | Eleven cases pass with the follow-up's flatten/spill/EH-cleanup transform and explicit exception-storage roots. Without exception-storage roots, thrown-only payloads fail even natively. Default/static-only Wasm and test-only shadow slots still fail cases. |
+| Tagged-reference lifetime cases against the real jank runtime archive. | Fourteen cases pass natively and with flatten/spill/EH cleanup. Runtime-owned exception root cells protect object/error payloads, rethrow and exception_ptr; the harness exception-storage wrapper is removed. Default/static-only Wasm and test-only shadow slots still fail other cases. See [runtime-owned exceptions](#runtime-owned-exception-roots). |
 | Binaryen pointer spilling. | Stock SDK fails; preserved names, flattening and a private memory64/EH-cleanup patch cover the measured operands and unwind frames. The separate isolated collector script still uses the unmodified SDK and is not fixed by this experiment. |
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
 | Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Ordinary startup fails; static roots plus the private spill transform reach both markers with GC enabled, including 20 loaded-function entries. |
@@ -36,7 +36,7 @@ The original baseline uses an installed jank compiler for host code generation a
 
 The native Zig C++ build still uses the installed jank package's matching libc++, libunwind and LLVM 23 compiler runtime. It does not rebuild all dependencies with Zig. The generated launcher's extraction also invokes the installed jank compiler before the final Zig compilation.
 
-The ordinary wasm64 spike still fails. Startup diagnostics establish a missing-static-root defect; static registration alone still loses locals. The later private Binaryen spill experiment passes the measured lifetime cases and spike markers with continuous GC, but has uncovered operand-stack coverage gaps and unverified exception-edge behavior. A linked application or these finite passes are not evidence of complete root discovery or a supported general-purpose Wasm runtime.
+The ordinary wasm64 spike still fails. Startup diagnostics establish a missing-static-root defect; static registration alone still loses locals. The private Binaryen flatten/spill/EH-cleanup transform and subsequent runtime exception ownership fix pass the measured lifetime cases and spike markers with continuous GC. Non-i64 pointer carriers and arbitrary native exceptions with GC-managed fields remain outside these checks. A linked application or these finite passes are not evidence of complete root discovery or a supported general-purpose Wasm runtime.
 
 ## Environment
 
@@ -1663,6 +1663,11 @@ passes all seven cases, but the full native suite was not rerun for this step.
 
 ### wasm64 spill follow-up: operand stacks and exception paths
 
+This section records the historical PR #14 checkpoint. Its harness exception
+roots and corresponding matrix modes have since been removed; the current
+runtime implementation and replacement matrix are documented below under
+[runtime-owned exceptions](#runtime-owned-exception-roots).
+
 This is a collector-only extension of PR #12, using the same real runtime
 archives and Ubuntu container. No runtime source or SDK installation changed.
 The final pipeline is **`--flatten --spill-pointers`**, with no subsequent
@@ -1944,6 +1949,183 @@ general Wasm support. They do not validate browser behavior, arbitrary tail
 calls, suspension/callbacks, high addresses, stack-overflow handling, all
 runtime code paths, or production exception ownership. Weak links guard the
 observed objects, not every internal vector/map node or backing allocation.
+
+## Runtime-owned exception roots
+
+The runtime now owns exception payload roots, rather than asking a probe to
+interpose on `__cxa_throw`. This changes native runtime code as well as the
+wasm64 archive. The old `host-exception-roots` and `spill-exception-roots`
+matrix modes no longer exist. No exception-storage root registration or
+`__cxa_throw` wrapper remains in `gc-roots.cpp` or its link commands.
+
+### Ownership and compatibility
+
+`jank/runtime/throw.hpp` exposes `runtime::thrown_object` and `thrown_error`,
+publicly derived from `object_ref` and `error_ref` respectively, with
+`runtime::throw_object` and `jank::throw_error` noreturn entry points. Existing
+base catches by value and const reference still match. `oref<object>` and
+`jtl::ref<error::base>` are not final. The error holder is necessary:
+`jtl::make_ref<error::base>` uses `new(UseGC)`.
+
+Each holder owns one scanned `GC_MALLOC_UNCOLLECTABLE(sizeof(void *))` cell.
+The object cell stores the **raw tagged word**, and the error cell stores the
+GC-managed error pointer. bdwgc's `gc.h` explicitly documents that uncollectable
+allocations are scanned even when otherwise unreachable. Both the runtime
+build and `cmake/dependency/bdwgc.cmake` set
+`POINTER_MASK=0x0000FFFFFFFFFFFF`; `gcconfig.h` applies that mask in
+`FIXUP_POINTER`. The native and wasm64 disappearing-link checks exercise this
+combination, rather than substituting an untagged object root.
+
+Copy and move construction allocate independent cells; moving does not steal
+the source's root. Assignment updates the owned cell with
+`GC_PTR_STORE_AND_DIRTY` before changing the base value, and destruction calls
+`GC_FREE`. An out-of-line,
+noinline allocator helper keeps the tagged word live across root allocation,
+instead of relying on a copy already stored in the unscanned exception object.
+All holder special members are noexcept. Root-allocation failure deliberately
+calls `std::terminate`: continuing unrooted is unsafe, and throwing from an
+exception copy constructor is not a recovery strategy. OOM was not injected.
+
+`throw;` retains the original dynamic exception; `std::current_exception`,
+copied `exception_ptr`s, `std::rethrow_exception`, and nested-exception owners
+retain it until their last owner dies. ABIs which copy the exception use the
+holder's independent-cell copy constructor. The dynamic thrown types have
+intentionally changed, but the source audit found no application exact-type
+matching or payload inspection through `exception_ptr`. cpptrace's existing
+RTTI machinery uses ABI `can_catch`, including base-class matching; the updated
+`util/try` regression exercises both rooted types through its base handlers.
+
+Routing changes include:
+
+- C++ generation for jank objects and canonical `error_ref` values; native
+  non-reference exception values retain ordinary C++ `throw` semantics.
+- `jank_throw`, evaluator object/error throws, math sources and templates,
+  UUID/instant construction, future/delay saved object failures, and REPL
+  initialization failures.
+- Error factories and named error rethrows, `jtl::result` panic, object and
+  visit fallbacks, metadata/C-API checks, IR/JIT failures, runtime contexts,
+  module loading, reparsing, environment setup, and the executable entry point.
+
+This revision's IR path emits C++ through `gen_cpp`; no separate LLVM
+`__cxa_throw` emitter or in-tree production caller of `jank_throw` was found.
+The C API remains available and is tested directly. The `.jank` C++-interop
+audit found native throw fixtures, not handwritten object/error throws needing
+another route. Bare rethrows, standard exceptions, invalid-arity exceptions,
+CLI `immutable_string` exceptions and ordinary native interop throws are
+deliberately unchanged. This contract does not root arbitrary native exception
+fields, handwritten raw base-reference throws outside these routes, or values
+mutated through a base alias rather than the holder's assignment operators.
+
+### Current matrix
+
+P/F are the matrix's PASS/FAIL result, requiring both the case marker and clean
+exit. L/N/T/R are locals/nested/temporary/runtime-internal, G+/G- registered and
+unregistered globals, RC reclaim-control. EH columns are caller local, thrown
+payload, 10k unwind/stack recovery, bare rethrow, copied exception_ptr, and error.
+
+| Mode | L | N | T | R | G+ | G- | RC | Operand | EH local | EH payload | EH 10k | Rethrow | Ptr | Error |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Native | P | P | P | P | P | P | P | P | P | P | P | P | P | P |
+| wasm64 default | F | F | F | F | P | F | P | F | F | P | F | P | P | P |
+| Static roots | F | F | F | F | P | P | P | F | F | P | F | P | P | P |
+| Asyncify | F | F | F | F | F | F | F | F | F | F | F | F | F | F |
+| Flatten/spill | P | P | P | P | P | P | P | P | P | P | P | P | P | P |
+| Test shadow slots | P | P | P | F | P | P | P | P | P | P | P | P | P | P |
+
+Runtime-owned exceptions pass even in the non-spill Wasm controls, but caller
+locals still need the spill transform. Asyncify still fails (including uncaught
+`WebAssembly.Exception {}`); those failures have not been relabeled successes.
+The matrix exits successfully only when native passes everything and at least
+one automatic Wasm strategy passes everything. That strategy is flatten/spill.
+
+Selected output (no harness exception roots):
+
+```text
+host exception-payload: PASS (exit=0)
+host exception-rethrow: PASS (exit=0)
+host exception-ptr: PASS (exit=0)
+host exception-error: PASS (exit=0)
+spill exception-local: PASS (exit=0)
+spill exception-payload: PASS (exit=0)
+spill exception-stack: PASS (exit=0)
+spill exception-rethrow: PASS (exit=0)
+spill exception-ptr: PASS (exit=0)
+spill exception-error: PASS (exit=0)
+```
+
+`exception-ptr` and `exception-error` also require eventual weak-link clearing
+after the last exception owner dies. Native doctests additionally cover
+collection from unwind destructors and catches, `throw;`, copied exception_ptr
+ownership after catch exit, nested throws and `throw_with_nested`, independent
+copy/move cells and assignment, negative reclamation, the real `jank_throw`
+path, and generated object/error/native throws. No cleared weak link is
+dereferenced. Error-alias recognition has a separate positive/cv/negative test.
+
+Run the updated runtime and suites in the existing container:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh host
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh build
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh gc-roots
+docker exec --user 1000:1000 -e SAFEPOINT_ITERATIONS=20 jank-host-build \
+  bash scripts/build-wasm64-target.sh startup-spill
+```
+
+Native regression:
+
+```text
+test: exit=0 elapsed=8s
+tested 870 jank files with 9 skips and 0 failures
+[doctest] test cases:  133 |  133 passed | 0 failed | 0 skipped
+[doctest] assertions: 2125 | 2125 passed | 0 failed |
+[doctest] Status: SUCCESS!
+```
+
+Use the documented build driver: it exports `LC_ALL=C.UTF-8`. A direct
+`cmake --build` without that environment rejected the unchanged UTF-8 ellipsis
+in nREPL source as an unterminated string; the driver build succeeded. The
+initial generated-throw regression also caught an error-alias lookup mistake;
+scope-based alias resolution now passes, and the test explicitly distinguishes
+boxed object exceptions from unchanged native integer exceptions.
+
+The 20-entry startup check still requires both spike markers on every entry,
+with GC enabled. It is not a general Wasm-support or arbitrary native
+exception-rooting claim. The 4 MiB diagnostic stack remains confined to
+`startup-spill`; normal build/browser configuration is unchanged.
+
+Final run output:
+
+```text
+gc-roots: exit=0 elapsed=52s
+EXCEPTION payload: unwind-collections=8 retained-during-unwind=1 runtime-rooted=1
+CASE exception-payload: PASS collections=10 internal-collections=0
+CASE exception-rethrow: PASS collections=14 internal-collections=0
+CASE exception-ptr: PASS collections=14 internal-collections=0
+CASE exception-error: PASS collections=8 internal-collections=0
+EXCEPTION stack: iterations=10000 before=1551904 after=1551904 unwind-collections=60 recovery=1
+STARTUP ITERATION 1/20: collections=15 used-bytes=16863232 heap-bytes=18784256 status=0
+STARTUP ITERATION 20/20: collections=15 used-bytes=16863232 heap-bytes=18784256 status=0
+STARTUP VERDICT: mode=continuous PASS iterations=20 passed=20 failed=0 exit=0
+STARTUP SPILL VERDICT: PASS
+```
+
+The untransformed spike control still fails with `function signature mismatch`;
+the runtime exception fix does not root arbitrary Wasm caller locals. Collections
+advance during the first transformed entry, not entries 2-20.
+
+| Matched diagnostic Wasm | Before transform | After transform | Increase |
+| --- | ---: | ---: | ---: |
+| gc-roots (14 cases) | 6,156,107 B | 9,143,582 B | 48.529% |
+| Spike | 10,506,073 B | 25,391,932 B | 141.688% |
+
+The latest matched successful GC-disabled 20-entry whole-process medians were
+0.181539 s before and 4.213125 s after the transform. As in the earlier sections,
+these include Node compilation/startup, were measured alongside the matrix, and
+are not an isolated exception or steady-state GC benchmark. Raw per-case output,
+commands, and startup markers are under ignored
+`artifacts/logs/wasm64-gc-roots-*` and `artifacts/logs/wasm64-startup-spill-*`;
+native output is in `artifacts/logs/host-test.log`.
 
 ## WASI
 

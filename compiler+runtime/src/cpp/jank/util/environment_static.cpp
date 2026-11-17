@@ -11,7 +11,7 @@ namespace jank::util
 
   jtl::immutable_string build_dir()
   {
-    throw error::runtime_static_feature_disabled("build_dir");
+    jank::throw_error(error::runtime_static_feature_disabled("build_dir"));
   }
 
   bool is_dynamic_runtime()
@@ -21,7 +21,7 @@ namespace jank::util
 
   jtl::result<jtl::immutable_string, error_ref> prelude_hpp_path()
   {
-    throw error::runtime_static_feature_disabled("prelude_hpp_path");
+    jank::throw_error(error::runtime_static_feature_disabled("prelude_hpp_path"));
   }
 
   jtl::immutable_string multi_arch_lib_path()

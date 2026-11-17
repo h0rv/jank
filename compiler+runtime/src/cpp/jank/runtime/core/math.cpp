@@ -1,3 +1,4 @@
+#include <jank/runtime/throw.hpp>
 #include <random>
 
 #include <jank/runtime/core/math.hpp>
@@ -331,7 +332,7 @@ namespace jank::runtime
             if(typed_r_data == 0ll)
             {
 #pragma clang diagnostic pop
-              throw make_box("Division by zero is not permitted.").erase();
+              jank::runtime::throw_object(make_box("Division by zero is not permitted.").erase());
             }
             else
             {
@@ -702,10 +703,11 @@ namespace jank::runtime
     }
     else
     {
-      throw make_box(
-        util::format("The `parse-long` function expects a `persistent_string`, not a `{}`.",
-                     object_type_str(o.get_type())))
-        .erase();
+      jank::runtime::throw_object(
+        make_box(
+          util::format("The `parse-long` function expects a `persistent_string`, not a `{}`.",
+                       object_type_str(o.get_type())))
+          .erase());
     }
   }
 
@@ -736,10 +738,11 @@ namespace jank::runtime
     }
     else
     {
-      throw make_box(
-        util::format("The `parse-double` function expects a `persistent_string`, not a `{}`.",
-                     object_type_str(o.get_type())))
-        .erase();
+      jank::runtime::throw_object(
+        make_box(
+          util::format("The `parse-double` function expects a `persistent_string`, not a `{}`.",
+                       object_type_str(o.get_type())))
+          .erase());
     }
   }
 
@@ -777,10 +780,11 @@ namespace jank::runtime
         }
         else
         {
-          throw make_box(
-            util::format("The `to-big-integer` function expects a numeric value, not a `{}`.",
-                         object_type_str(o.get_type())))
-            .erase();
+          jank::runtime::throw_object(
+            make_box(
+              util::format("The `to-big-integer` function expects a numeric value, not a `{}`.",
+                           object_type_str(o.get_type())))
+              .erase());
         }
       },
       o);
@@ -806,12 +810,14 @@ namespace jank::runtime
         {
           if(std::isnan(typed_o->data))
           {
-            throw make_box("`##NaN` cannot be converted to a `big_decimal`.").erase();
+            jank::runtime::throw_object(
+              make_box("`##NaN` cannot be converted to a `big_decimal`.").erase());
           }
 
           if(std::isinf(typed_o->data))
           {
-            throw make_box("`##Inf` cannot be converted to a `big_decimal`.").erase();
+            jank::runtime::throw_object(
+              make_box("`##Inf` cannot be converted to a `big_decimal`.").erase());
           }
 
           return make_box<obj::big_decimal>(typed_o->data);
@@ -830,10 +836,11 @@ namespace jank::runtime
         }
         else
         {
-          throw make_box(
-            util::format("The `to-big-decimal` function expects a numeric value, not a `{}`.",
-                         object_type_str(o.get_type())))
-            .erase();
+          jank::runtime::throw_object(
+            make_box(
+              util::format("The `to-big-decimal` function expects a numeric value, not a `{}`.",
+                           object_type_str(o.get_type())))
+              .erase());
         }
       },
       o);

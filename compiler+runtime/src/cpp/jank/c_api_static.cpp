@@ -18,6 +18,6 @@ extern "C"
                         jank_usize const,
                         int (*)(int const, char const ** const))
   {
-    throw jank::error::runtime_static_feature_disabled("jank_init_dynamic");
+    jank::throw_error(jank::error::runtime_static_feature_disabled("jank_init_dynamic"));
   }
 }

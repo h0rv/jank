@@ -1,5 +1,6 @@
 #pragma once
 
+#include <jank/runtime/throw.hpp>
 #include <jank/runtime/object.hpp>
 #include <jank/runtime/core/make_box.hpp>
 #include <jank/runtime/obj/big_integer.hpp>
@@ -1193,7 +1194,7 @@ namespace jank::runtime
 
         if(__builtin_add_overflow(l, 1ll, &res))
         {
-          throw make_box("Overflow on increment.").erase();
+          jank::runtime::throw_object(make_box("Overflow on increment.").erase());
         }
 
         return res;
@@ -1220,7 +1221,7 @@ namespace jank::runtime
 
             if(__builtin_add_overflow(typed_l->data, 1ll, &res))
             {
-              throw make_box("Overflow on increment.").erase();
+              jank::runtime::throw_object(make_box("Overflow on increment.").erase());
             }
 
             return make_box(res);
@@ -1241,7 +1242,7 @@ namespace jank::runtime
 
         if(__builtin_add_overflow(l->to_integer(), 1ll, &res))
         {
-          throw make_box("Overflow on increment.").erase();
+          jank::runtime::throw_object(make_box("Overflow on increment.").erase());
         }
 
         return res;
@@ -1271,7 +1272,7 @@ namespace jank::runtime
 
         if(__builtin_sub_overflow(l, 1ll, &res))
         {
-          throw make_box("Overflow on increment.").erase();
+          jank::runtime::throw_object(make_box("Overflow on increment.").erase());
         }
 
         return res;
@@ -1298,7 +1299,7 @@ namespace jank::runtime
 
             if(__builtin_sub_overflow(typed_l->data, 1ll, &res))
             {
-              throw make_box("Overflow on increment.").erase();
+              jank::runtime::throw_object(make_box("Overflow on increment.").erase());
             }
 
             return make_box(res);
@@ -1319,7 +1320,7 @@ namespace jank::runtime
 
         if(__builtin_sub_overflow(l->to_integer(), 1ll, &res))
         {
-          throw make_box("Overflow on increment.").erase();
+          jank::runtime::throw_object(make_box("Overflow on increment.").erase());
         }
 
         return res;

@@ -443,8 +443,8 @@ namespace jank::analyze::cpp_util
     auto exec_res{ (*locked_interpreter)->ParseAndExecute(code.c_str(), &value) };
     if(exec_res || trap.hasErrorOccurred())
     {
-      throw error::codegen_internal_failure(
-        util::format("Unable to get RTTI for `{}`.", cppinterop::get_type_as_string(type)));
+      jank::throw_error(error::codegen_internal_failure(
+        util::format("Unable to get RTTI for `{}`.", cppinterop::get_type_as_string(type))));
     }
 
     auto const lljit{ (*locked_interpreter)->getExecutionEngine() };
@@ -839,9 +839,9 @@ namespace jank::analyze::cpp_util
                 return type;
               }
             default:
-              throw error::codegen_internal_failure(
+              jank::throw_error(error::codegen_internal_failure(
                 util::format("An array with elements of type `{}` cannot be visited.",
-                             object_type_str(o.get_type())));
+                             object_type_str(o.get_type()))));
           }
         }
       default:
@@ -976,6 +976,15 @@ namespace jank::analyze::cpp_util
   bool is_any_object(jtl::ptr<void> type)
   {
     return is_untyped_object(type) || is_typed_object(type);
+  }
+
+  bool is_error_ref(jtl::ptr<void> const type)
+  {
+    auto const can_type{ cppinterop::get_canonical_type(
+      cppinterop::get_type_without_cv(cppinterop::get_non_reference_type(type))) };
+    static auto const error_type{ cppinterop::get_canonical_type(
+      cppinterop::get_type_from_scope(resolve_scope("jank.error_ref").expect_ok())) };
+    return can_type == error_type;
   }
 
   /* Clang treats int, long, float, etc as built-in, but not pointers. I consider

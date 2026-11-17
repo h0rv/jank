@@ -6,6 +6,23 @@
 #include <jtl/immutable_string.hpp>
 #include <jtl/trait/type_name.hpp>
 
+namespace jtl
+{
+  template <typename T>
+  struct ref;
+}
+
+namespace jank
+{
+  namespace error
+  {
+    struct base;
+  }
+
+  [[noreturn]]
+  void throw_error(jtl::ref<error::base> value);
+}
+
 namespace jank::error
 {
   [[noreturn]]
@@ -53,7 +70,7 @@ namespace jtl
       /* This is a roundabout way of looking for error_ref. */
       if constexpr(requires(E t) { E::value_type::is_error; })
       {
-        throw r.expect_err();
+        jank::throw_error(r.expect_err());
       }
       else if constexpr(jtl::is_same<E, immutable_string>)
       {

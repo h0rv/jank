@@ -17,7 +17,8 @@ sdk = pathlib.Path(os.environ.get('EMSDK', root / '.tools/gc-wasm/emsdk'))
 node = root / '.tools/node-v26.13.1-linux-x64/bin/node'
 cases = ['locals', 'nested', 'temporary', 'runtime-internal', 'registered-global',
          'unregistered-global', 'reclaim-control', 'operand', 'exception-local',
-         'exception-payload', 'exception-stack']
+         'exception-payload', 'exception-stack', 'exception-rethrow', 'exception-ptr',
+         'exception-error']
 
 
 def run(name, command, cwd=None):
@@ -80,19 +81,15 @@ def async_archive():
 results = []
 automatic_pass = False
 host_pass = False
-for mode in ['host', 'host-exception-roots', 'default', 'static-roots', 'asyncify', 'spill',
-             'spill-exception-roots', 'shadow']:
-    native = mode.startswith('host')
-    exception_roots = mode.endswith('-exception-roots')
-    spilling = mode.startswith('spill')
+for mode in ['host', 'default', 'static-roots', 'asyncify', 'spill', 'shadow']:
+    native = mode == 'host'
+    spilling = mode == 'spill'
     target = 'host' if native else 'wasm64'
     build, db = database(target)
     entry = next(x for x in db if x['file'].endswith('/src/cpp/jank/runtime/context.cpp'))
     compile_flags = flags(entry) + ['-O2']
     if mode == 'shadow':
         compile_flags.append('-DGC_ROOTS_SHADOW')
-    if exception_roots:
-        compile_flags.append('-DGC_ROOTS_EXCEPTION_STORAGE')
     obj = out / f'{mode}.o'
     code, _ = run(mode + '-compile', compile_flags + ['-c', root / 'wasm-probe/gc-roots.cpp', '-o', obj],
                   entry['directory'])
@@ -110,8 +107,6 @@ for mode in ['host', 'host-exception-roots', 'default', 'static-roots', 'asyncif
             link += ['-sMEMORY64=1', '-fwasm-exceptions', '-Wl,--error-limit=0']
         if mode == 'asyncify':
             link += ['-sASYNCIFY', '-sASYNCIFY_STACK_SIZE=128000']
-        if exception_roots:
-            link += ['-Wl,--wrap=__cxa_throw']
         if spilling:
             link += ['-g', '--profiling-funcs']
         code, _ = run(mode + '-link', link + ['-o', exe])
@@ -133,9 +128,9 @@ for mode in ['host', 'host-exception-roots', 'default', 'static-roots', 'asyncif
         statuses.append(status)
         results.append(f'{mode} {case}: {status} ({stage})')
     passed = all(x == 'PASS' for x in statuses)
-    if mode == 'host-exception-roots':
+    if mode == 'host':
         host_pass = passed
-    elif mode in ('default', 'static-roots', 'asyncify', 'spill', 'spill-exception-roots'):
+    elif mode in ('default', 'static-roots', 'asyncify', 'spill'):
         automatic_pass |= passed
 
 path = logs / 'wasm64-gc-roots.results'

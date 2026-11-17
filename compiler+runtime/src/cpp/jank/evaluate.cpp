@@ -1,3 +1,4 @@
+#include <jank/runtime/throw.hpp>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 
 #include <cpptrace/from_current.hpp>
@@ -358,7 +359,7 @@ namespace jank::evaluate
       /* We keep the original form from the call expression so we can point
        * back to it if an exception is thrown during eval. */
       e->add_usage(object_source(expr->form));
-      throw e;
+      jank::throw_error(e);
     }
   }
 
@@ -475,7 +476,7 @@ namespace jank::evaluate
   object_ref eval(expr::local_reference_ref const)
   /* Doesn't make sense to eval these, since let is wrapped in a fn and JIT compiled. */
   {
-    throw make_box("unsupported eval: local_reference").erase();
+    jank::runtime::throw_object(make_box("unsupported eval: local_reference").erase());
   }
 
   object_ref eval(expr::function_ref const expr)
@@ -520,19 +521,19 @@ namespace jank::evaluate
   object_ref eval(expr::recur_ref const)
   /* This will always be in a fn or loop, which will be JIT compiled. */
   {
-    throw make_box("unsupported eval: recur").erase();
+    jank::runtime::throw_object(make_box("unsupported eval: recur").erase());
   }
 
   object_ref eval(expr::recursion_reference_ref const)
   /* This will always be in a fn, which will be JIT compiled. */
   {
-    throw make_box("unsupported eval: recursion_reference").erase();
+    jank::runtime::throw_object(make_box("unsupported eval: recursion_reference").erase());
   }
 
   object_ref eval(expr::named_recursion_ref const)
   /* This will always be in a fn, which will be JIT compiled. */
   {
-    throw make_box("unsupported eval: named_recursion").erase();
+    jank::runtime::throw_object(make_box("unsupported eval: named_recursion").erase());
   }
 
   object_ref eval(expr::do_ref const expr)
@@ -602,7 +603,7 @@ namespace jank::evaluate
 
   object_ref eval(expr::cpp_type_ref const)
   {
-    throw make_box("unsupported eval: cpp_type").erase();
+    jank::runtime::throw_object(make_box("unsupported eval: cpp_type").erase());
   }
 
   object_ref eval(expr::cpp_value_ref const expr)

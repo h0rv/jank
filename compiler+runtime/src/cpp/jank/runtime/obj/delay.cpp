@@ -1,3 +1,4 @@
+#include <jank/runtime/throw.hpp>
 #include <jank/runtime/obj/delay.hpp>
 #include <jank/runtime/core/call.hpp>
 #include <jank/runtime/core/make_box.hpp>
@@ -26,7 +27,7 @@ namespace jank::runtime::obj
 
     if(error.is_some())
     {
-      throw error;
+      jank::runtime::throw_object(error);
     }
 
     try

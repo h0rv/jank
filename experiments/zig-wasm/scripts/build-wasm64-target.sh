@@ -122,6 +122,11 @@ PY
     grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' artifacts/logs/wasm64-spike-run.log
     ;;
   startup-safepoints)
+    iterations="${SAFEPOINT_ITERATIONS:-20}"
+    if ! [[ "$iterations" =~ ^[0-9]+$ ]] || ((10#$iterations < 1 || 10#$iterations > 10000)); then
+      echo 'SAFEPOINT_ITERATIONS must be an integer in [1, 10000]' >&2
+      exit 2
+    fi
     run startup-safepoints-generate generate_spike
     run startup-safepoints-compile python3 - "$ROOT" <<'PY'
 import json, pathlib, shlex, subprocess, sys
@@ -160,16 +165,20 @@ subprocess.run([flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1', '-fw
 PY
     failed=0
     : > artifacts/logs/wasm64-startup-safepoints.results
-    for strategy in no-gc static-roots safepoint; do
+    for strategy in no-gc static-roots safepoint safepoint-churn; do
       status=0
       run "startup-safepoints-$strategy" "$ROOT/.tools/node-v26.13.1-linux-x64/bin/node" \
-        "$SPIKE/startup-safepoints.js" "$strategy" || status=$?
+        "$SPIKE/startup-safepoints.js" "$strategy" "$iterations" || status=$?
       scalar=missing buffer=missing
       log="artifacts/logs/wasm64-startup-safepoints-$strategy.log"
       grep -Fxq 'jank -> Zig: scalar and wide result checks passed' "$log" && scalar=present
       grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' "$log" && buffer=present
       printf '%s: exit=%s scalar=%s buffer=%s\n' "$strategy" "$status" "$scalar" "$buffer" |
         tee -a artifacts/logs/wasm64-startup-safepoints.results
+      if [[ "$strategy" == safepoint* ]]; then
+        python3 "$ROOT/wasm-probe/startup-safepoints-check.py" "$log" "$strategy" "$iterations" "$status" |
+          tee -a artifacts/logs/wasm64-startup-safepoints.results || failed=1
+      fi
       if [[ "$strategy" != static-roots ]] &&
           { [[ "$status" != 0 ]] || [[ "$scalar" != present ]] || [[ "$buffer" != present ]]; }; then
         failed=1

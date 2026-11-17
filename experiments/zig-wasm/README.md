@@ -29,7 +29,7 @@ The original baseline uses an installed jank compiler for host code generation a
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
 | Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Node reaches a jank startup error; neither spike success marker is printed. |
 | Tagged jank map retention across wasm64 collections. | An explicitly registered static root passes; the default unregistered root is lost. This is a diagnostic control, not a runtime rooting solution. |
-| Real wasm64 spike with GC disabled during execution and explicit top-level collections. | Both success markers printed; post-call collection reclaimed collector space. No post-collection jank re-entry tested. |
+| Real wasm64 spike with GC disabled during execution and explicit top-level collections. | Both success markers in 20 iterations, including post-collection loaded-function re-entry; churn/extra-collection variant also passes with bounded observed used memory. |
 
 The native Zig C++ build still uses the installed jank package's matching libc++, libunwind and LLVM 23 compiler runtime. It does not rebuild all dependencies with Zig. The generated launcher's extraction also invokes the installed jank compiler before the final Zig compilation.
 
@@ -818,6 +818,8 @@ change or supported production rooting strategy is claimed.
 
 ### wasm64 top-level GC safepoint spike experiment
 
+#### Initial single-entry comparison
+
 This AI-assisted experiment reuses the real host compiler and wasm64 runtime
 archive from the lifetime matrix. It generates the actual `spike.core` launcher
 and module, links the unchanged runtime archive and Zig implementation, and
@@ -828,8 +830,8 @@ Node executable. No diagnostic context patch or fake implementation is linked.
 docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh startup-safepoints
 ```
 
-`safepoint` registers `__global_base..__data_end` and disables GC during the
-entire generated launcher call. Immediately before that call and after it
+The initial single-entry `safepoint` mode registers `__global_base..__data_end`
+and disables GC during the entire generated launcher call. Immediately before that call and after it
 returns, with no jank/runtime frames live, the driver performs exactly
 `GC_enable(); GC_gcollect(); GC_disable();`. It reports collection count,
 collector heap/free/used bytes and disabled state around each collection.
@@ -900,6 +902,101 @@ top-level boundary. It does **not** test resuming jank after that final
 collection, repeated workload cycles, bounded memory during a long call,
 callbacks/reentrancy, concurrency, or a general safepoint API. It neither fixes
 automatic local-root discovery nor changes production collector semantics.
+
+#### Repeated loaded-function re-entry and churn
+
+The AI-assisted follow-up extends the same driver and command. `safepoint` and
+`safepoint-churn` now default to **20** iterations; set `SAFEPOINT_ITERATIONS`
+in the container environment to override (1 through 10000):
+
+```sh
+docker exec --user 1000:1000 -e SAFEPOINT_ITERATIONS=20 jank-host-build \
+  bash scripts/build-wasm64-target.sh startup-safepoints
+```
+
+Each variant starts in a fresh Node process. Iteration 1 runs the real generated
+launcher and its normal `spike.core/-main`. Iterations 2 through N call
+`jank_call0(jank_deref(jank_var_intern_c("spike.core", "-main")))` in a noinline
+helper, preserving the loaded namespace and runtime context. The launcher is
+not reloaded: `jank_init_static(..., true, ...)` constructs a new context on
+each invocation, which is not the desired test of surviving loaded statics.
+No runtime references are held in the top-level loop across collection.
+
+After every invocation returns, the driver collects with exactly
+`GC_enable(); GC_gcollect(); GC_disable();`. The churn variant then allocates
+65,536 heap-boxed i64 values outside the i32 range and 65,536 persistent strings
+with non-inline string payloads, discards them, returns from the noinline churn
+helper and performs an **extra** collection. All of this precedes the next
+invocation; the last iteration also performs both boundary collections.
+GC remains disabled throughout every jank entry and throughout churn.
+
+`wasm-probe/startup-safepoints-check.py` validates each delimited iteration,
+requiring exactly one scalar marker and one buffer marker, sequential iteration
+numbers, status 0, the expected collection-count increment (one or two), a
+completed final diagnostic and Node exit 0. Missing/duplicate markers cannot
+be satisfied by another iteration. The command fails on either variant's
+validation failure. Memory bounds are **observed**, not encoded as an arbitrary
+passing threshold. The original no-gc/static-roots comparisons still run once.
+
+Both 20-iteration variants completed with all 40 required markers each.
+The collector heap was **44,535,808 bytes in every row**. Post-boundary used
+bytes and collection counts were:
+
+| Iteration | safepoint collections | safepoint used bytes | churn collections | churn used bytes |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 3 | 27033600 | 4 | 27115520 |
+| 2 | 4 | 27029504 | 6 | 27127808 |
+| 3 | 5 | 27029504 | 8 | 27127808 |
+| 4 | 6 | 27029504 | 10 | 27127808 |
+| 5 | 7 | 27029504 | 12 | 27127808 |
+| 6 | 8 | 27029504 | 14 | 27127808 |
+| 7 | 9 | 27029504 | 16 | 27127808 |
+| 8 | 10 | 27029504 | 18 | 27127808 |
+| 9 | 11 | 27029504 | 20 | 27127808 |
+| 10 | 12 | 27029504 | 22 | 27127808 |
+| 11 | 13 | 27029504 | 24 | 27127808 |
+| 12 | 14 | 27029504 | 26 | 27127808 |
+| 13 | 15 | 27029504 | 28 | 27127808 |
+| 14 | 16 | 27029504 | 30 | 27127808 |
+| 15 | 17 | 27029504 | 32 | 27127808 |
+| 16 | 18 | 27029504 | 34 | 27127808 |
+| 17 | 19 | 27029504 | 36 | 27127808 |
+| 18 | 20 | 27029504 | 38 | 27127808 |
+| 19 | 21 | 27029504 | 40 | 27127808 |
+| 20 | 22 | 27029504 | 42 | 27127808 |
+
+Final output:
+
+```text
+SAFEPOINT MEMORY: mode=safepoint first-used=27033600 last-used=27029504 min-used=27029504 max-used=27033600
+SAFEPOINT VERDICT: mode=safepoint PASS iterations=20 passed=20 failed=0 exit=0
+SAFEPOINT MEMORY: mode=safepoint-churn first-used=27115520 last-used=27127808 min-used=27115520 max-used=27127808
+SAFEPOINT VERDICT: mode=safepoint-churn PASS iterations=20 passed=20 failed=0 exit=0
+```
+
+For churn iteration 20 the first collection reduced used bytes from
+**27,127,808 to 27,115,520**; churn then raised usage to **39,698,432**, and the
+extra collection reduced it to **27,127,808**. Thus the stress allocation is
+actually reclaimed rather than accumulating each iteration. Both variants
+plateaued after iteration 2, with no linear used-memory or heap-size growth
+over these 20 calls. No runtime exception or trap was printed by either.
+The no-gc comparison still printed both markers and exited 0; static-roots
+still trapped with `RuntimeError: function signature mismatch` and exited 1.
+
+Additional checks: N=1 and N=3 overrides passed; 0, empty and nonnumeric argv
+counts returned 2. Validator negative controls rejected an empty log, a missing
+marker, duplicate marker, missing iteration, wrong collection increment and
+nonzero process exit. Detailed repeated-run logs retain the existing
+`wasm64-startup-safepoints-safepoint.log` and
+`wasm64-startup-safepoints-safepoint-churn.log` names; verdicts are in
+`wasm64-startup-safepoints.results`.
+
+This establishes successful loaded-function re-entry after the preceding
+safepoint collections for **this workload and build**. It does not establish a
+general rooting solution, automatic GC correctness, arbitrary runtime API
+coverage, repeated full initialization, concurrency/reentrant callbacks, or
+bounded peak memory during an unbounded jank call. The optimized diagnostic
+link settings and unchanged real runtime archive are the same as step 1.
 
 ## Files
 

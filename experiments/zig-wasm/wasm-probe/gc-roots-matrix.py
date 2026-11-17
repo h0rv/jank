@@ -7,6 +7,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import time
 
 root = pathlib.Path(sys.argv[1])
 out = root / 'artifacts/gc-roots'
@@ -22,6 +23,7 @@ def run(name, command, cwd=None):
     path = logs / f'wasm64-gc-roots-{name}.log'
     with path.open('w') as log:
         print(shlex.join(map(str, command)), file=log, flush=True)
+        start = time.monotonic()
         try:
             result = subprocess.run(list(map(str, command)), cwd=cwd, stdout=log,
                                     stderr=subprocess.STDOUT, timeout=240)
@@ -29,6 +31,7 @@ def run(name, command, cwd=None):
         except subprocess.TimeoutExpired:
             code = 124
         print(f'exit={code}', file=log)
+        print(f'elapsed-seconds={time.monotonic() - start:.6f}', file=log)
     return code, path.read_text()
 
 
@@ -101,8 +104,11 @@ for mode in ['host', 'default', 'static-roots', 'asyncify', 'spill', 'shadow']:
         if mode == 'asyncify':
             link += ['-sASYNCIFY', '-sASYNCIFY_STACK_SIZE=128000']
         if mode == 'spill':
-            link += ['-sBINARYEN_EXTRA_PASSES=--spill-pointers']
+            link += ['-g', '--profiling-funcs']
         code, _ = run(mode + '-link', link + ['-o', exe])
+        if not code and mode == 'spill':
+            code, _ = run(mode + '-transform', [sys.executable, root / 'wasm-probe/spill-pointers.py',
+                                              root, exe.with_suffix('.wasm')])
     statuses = []
     for case in cases:
         status = 'FAIL'

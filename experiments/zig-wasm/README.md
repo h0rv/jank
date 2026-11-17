@@ -8,7 +8,7 @@ Read the complete handoff prompt at [`../../ZIG_WASM_PROMPT.md`](../../ZIG_WASM_
 
 The branch starts at PR #1107 head `43ffa8d0a6bce1c17c552c6d46f4d6486dc304ed`. The PR separates a host compiler from a target static runtime and begins moving compiler configuration into JSON. The upstream PR remains authoritative for its current status.
 
-The original baseline uses an installed jank compiler for host code generation and a prebuilt native runtime. The separate Linux host-build reproduction below builds this fork's compiler and native static runtime. The later wasm64 runtime-archive attempt builds a target archive and links the spike, but startup fails before its checks execute.
+The original baseline uses an installed jank compiler for host code generation and a prebuilt native runtime. The separate Linux host-build reproduction below builds this fork's compiler and native static runtime. The later wasm64 runtime-archive attempt builds a target archive and links the spike. Untransformed startup fails; the subsequent explicit-rooting experiments have narrower successful results below.
 
 ## Results
 
@@ -24,10 +24,10 @@ The original baseline uses an installed jank compiler for host code generation a
 | The same module compiles to wasm32-WASI. | Failed on pointer width, platform guards and C++ threading dependencies. |
 | Newer Boehm collects on wasm64 with an explicit registered root. | Smoke passed through 32 forced collections. |
 | Newer Boehm discovers local roots with Asyncify. | Current smoke passes, but earlier variants lost live objects. Unresolved. |
-| Tagged-reference lifetime cases against the real jank runtime archive. | Native passes all seven; no automatic wasm64 strategy passes all. Explicit test-only shadow roots retain test locals but not runtime-internal lifetimes. |
-| Binaryen pointer spilling works in the collector test. | Failed during linking. The collector suite correctly exits 1. |
+| Tagged-reference lifetime cases against the real jank runtime archive. | Native and static roots plus the private memory64-patched Binaryen spill pass pass all seven cases. Default/static-only Wasm still fail; test-only shadow slots miss runtime-internal lifetimes. |
+| Binaryen pointer spilling. | Stock SDK fails; preserved names plus a private stack-arithmetic patch allow the real-runtime spill matrix to pass. The separate isolated collector script still uses the unmodified SDK and is not fixed by this experiment. |
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
-| Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Node reaches a jank startup error; neither spike success marker is printed. |
+| Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Ordinary startup fails; static roots plus the private spill transform reach both markers with GC enabled, including 20 loaded-function entries. |
 | Fork-built wasm32 Emscripten runtime archive and generated spike. | Configure and Zig object succeeded; runtime/core and spike C++ fail on 64-bit pointer assumptions. No archive, link or Node execution. |
 | Is the `reader_opts` startup error wasm64-specific? | Startup diagnostics trace wasm64's failure to missing runtime C++ static roots; wasm32 cannot yet reach startup for comparison. |
 | Tagged jank map retention across wasm64 collections. | An explicitly registered static root passes; the default unregistered root is lost. This is a diagnostic control, not a runtime rooting solution. |
@@ -35,7 +35,7 @@ The original baseline uses an installed jank compiler for host code generation a
 
 The native Zig C++ build still uses the installed jank package's matching libc++, libunwind and LLVM 23 compiler runtime. It does not rebuild all dependencies with Zig. The generated launcher's extraction also invokes the installed jank compiler before the final Zig compilation.
 
-The later wasm64 spike links the target runtime/core libraries and begins execution, but does not complete successfully. Startup diagnostics establish a missing-static-root defect. The real-runtime lifetime matrix below passes natively but finds no automatic wasm64 strategy that passes all cases; explicit test-only shadow slots do not cover runtime-internal locals. A linked application is not evidence of correct general root discovery or a supported general-purpose Wasm runtime.
+The ordinary wasm64 spike still fails. Startup diagnostics establish a missing-static-root defect; static registration alone still loses locals. The later private Binaryen spill experiment passes the measured lifetime cases and spike markers with continuous GC, but has uncovered operand-stack coverage gaps and unverified exception-edge behavior. A linked application or these finite passes are not evidence of complete root discovery or a supported general-purpose Wasm runtime.
 
 ## Environment
 
@@ -911,6 +911,11 @@ dependency pin, or normal spike assertion was changed.
 
 ### wasm64 tagged-reference collector lifetime matrix
 
+The results in this subsection precede the [memory64 spill follow-up](#wasm64-binaryen-spill-pointers-with-continuous-gc).
+The current `gc-roots` command uses that follow-up's private patched optimizer
+for spill mode and now returns 0; the historical link failure below used the
+unmodified SDK.
+
 This AI-assisted follow-up tests `wasm-probe/gc-roots.cpp` against the actual
 `libjank-static-runtime.a`, not the standalone newer `gc.c` experiment. It calls
 `jank_init_base()`, never `jank_init_static()` or a core-module loader. It makes
@@ -951,8 +956,9 @@ additional compiler flag** `-DEMSCRIPTEN_ASYNCIFY`, and replaces those members
 with `llvm-ar r`. This is the definition added by bdwgc's
 `enable_emscripten_asyncify` option. All other runtime/core members are unchanged.
 The link adds that option's `-sASYNCIFY -sASYNCIFY_STACK_SIZE=128000`.
-The spill variant adds `-sBINARYEN_EXTRA_PASSES=--spill-pointers` to the normal
-archive link. Neither variant replaces the collector with the newer GC probe.
+The original spill variant added `-sBINARYEN_EXTRA_PASSES=--spill-pointers` to
+the normal archive link. The current invocation is documented in the follow-up.
+Neither variant replaces the collector with the newer GC probe.
 
 #### Cases, detector and controls
 
@@ -1291,6 +1297,305 @@ general rooting solution, automatic GC correctness, arbitrary runtime API
 coverage, repeated full initialization, concurrency/reentrant callbacks, or
 bounded peak memory during an unbounded jank call. The optimized diagnostic
 link settings and unchanged real runtime archive are the same as step 1.
+
+### wasm64 Binaryen spill-pointers with continuous GC
+
+This AI-assisted follow-up reuses the same container, SDK, Node, Zig and real
+23,888,468-byte runtime archive. No runtime/collector source, submodule pin or
+global tool installation changed. It tests **only pointer spilling**, plus the
+already-required explicit static roots; it does not use Asyncify or disable GC
+as a correctness workaround. The tagged-reference fixture's existing bounded
+GC-disabled construction/verification intervals are unchanged.
+
+#### Source diagnosis and why names alone are insufficient
+
+The emsdk's tool reports:
+
+```text
+wasm-opt version 133 (version_133-159-ga9141c8cc)
+```
+
+The matching Binaryen source is commit `a9141c8cc`:
+
+* `src/passes/SpillPointers.cpp::spillPointers` sets `pointerType` to
+  `memories[0]->addressType`. It considers **all locals and parameters of that
+  type**, without examining tag bits. On memory64 that is **i64**, so NaN-boxed
+  `object_ref` values are candidates. Each spill is an eight-byte `i64.store`;
+  the existing collector `POINTER_MASK=0x0000FFFFFFFFFFFF` is unchanged.
+* Both `visitCall` and `visitCallIndirect` record calls for backwards liveness
+  analysis. A candidate must be live after a call to be selected. There is no
+  blanket omission of `call_indirect`.
+* `src/abi/stack.h::getStackSpace` calls
+  `src/wasm/wasm-emscripten.cpp::getStackPointerGlobal`. That lookup accepts an
+  imported global whose base is `__stack_pointer` or a defined global with that
+  internal name. It does **not** test the type or search exports.
+* The failed unnamed module has `(global $global$0 (mut i64) ...)`: the stack
+  pointer exists and is **defined, mutable i64**, not imported or absent.
+  Debug/name stripping makes it unidentifiable to this name-only lookup.
+  Running the stock optimizer on that input reproduces exit 1:
+
+  ```text
+  Fatal: getStackSpace: failed to find the stack pointer
+  ```
+
+* As a disproof of "just keep names", the preserved-name startup module has
+  `(global $__stack_pointer (mut i64) ...)`. Running the **same stock tool** on
+  it reaches a second defect, exit 134:
+
+  ```text
+  unhandled pointerType
+  UNREACHABLE executed at /b/s/w/ir/cache/builder/emscripten-releases/binaryen/src/abi/stack.h:64!
+  ```
+
+  `getStackSpace` only implements i32 subtraction and unconditionally uses i32
+  addition on return. Changing extra-pass spelling cannot implement i64
+  arithmetic. The two diagnostics and actual global declarations establish
+  the reachable failure chain, rather than guessing from the first error.
+
+The minimal local patch, `wasm-probe/binaryen-memory64-stack.patch`, adds i64
+subtraction/constants for stack allocation and matching i64 addition/constants
+for restoration. It changes **only `src/abi/stack.h`**; the liveness algorithm,
+spilling policy, collector and runtime are untouched. It does not add exception
+cleanup or stack-overflow checks.
+
+#### Private build and commands
+
+From this experiment directory, reuse the documented running container. All
+downloads/builds remain ignored and the SDK binaries are never replaced:
+
+```sh
+mkdir -p .tools artifacts/logs
+curl -fL https://codeload.github.com/WebAssembly/binaryen/tar.gz/a9141c8cc \
+  -o .tools/binaryen.tar.gz
+echo 'e67fe7ca3eaf0ff562ff1fb0a4aa682857de16cc61ede27ff8ca4792cf2084ad  .tools/binaryen.tar.gz' \
+  | sha256sum -c -
+tar -xzf .tools/binaryen.tar.gz -C .tools
+GIT_CEILING_DIRECTORIES="$PWD/.tools" git -C .tools/binaryen-a9141c8cc \
+  apply --check "$PWD/wasm-probe/binaryen-memory64-stack.patch"
+GIT_CEILING_DIRECTORIES="$PWD/.tools" git -C .tools/binaryen-a9141c8cc \
+  apply "$PWD/wasm-probe/binaryen-memory64-stack.patch"
+rg -n 'SubInt64|AddInt64' .tools/binaryen-a9141c8cc/src/abi/stack.h
+docker exec --user 1000:1000 jank-host-build cmake \
+  -S .tools/binaryen-a9141c8cc -B artifacts/build-binaryen -GNinja \
+  -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF -DBUILD_SHARED_LIBS=OFF
+docker exec --user 1000:1000 jank-host-build cmake --build artifacts/build-binaryen \
+  --target wasm-opt -j6
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh gc-roots
+docker exec --user 1000:1000 -e SAFEPOINT_ITERATIONS=20 jank-host-build \
+  bash scripts/build-wasm64-target.sh startup-spill
+```
+
+The Git ceiling is necessary: Git otherwise finds the parent repository and
+silently skips patching files under its ignored `.tools` directory. An initial
+build did exactly that and reproduced `unhandled pointerType`; inspection and
+a three-edge incremental rebuild after actually applying the patch resolved
+it. Run this binary **inside the container**: a mistaken VM invocation failed
+on missing `GLIBC_2.38`/`GLIBCXX_3.4.32`, not on Wasm compilation.
+
+`gc-roots` spill mode now links normally with `-O2 -g --profiling-funcs`, then
+invokes `wasm-probe/spill-pointers.py` on the linked module. `startup-spill`
+shares the existing startup-safepoints compilation path with separate filenames
+and the same `-O2 -g --profiling-funcs -sALLOW_MEMORY_GROWTH=1` settings.
+The helper defaults to `artifacts/build-binaryen/bin/wasm-opt` (override via
+`SPILL_WASM_OPT`), saves a `.unspilled.wasm`, then transforms in place only after
+successful output. These commands always freshly link before transforming.
+No optimizer is run after spilling, so nothing later removes the stores.
+
+The standalone invocation enables the input's Emscripten features explicitly:
+memory64, exception-handling, bulk-memory, mutable-globals, nontrapping float
+conversion, sign extension, reference-types and multivalue. An initial
+`--all-features` invocation emitted experimental **compact imports** (see
+`WasmBinaryWriter::writeImports`, `hasCompactImports()`), which Node rejected:
+
+```text
+Aborted(CompileError: WebAssembly.instantiate(): unknown import kind 0x7f @+1343)
+```
+
+That was a transform-invocation error, not a GC result. Removing the blanket
+feature flag and naming only the existing features fixed instantiation.
+The familiar MEMORY64 deprecation and limited-postlink-optimization warnings
+are expected here: both comparison modules use the same diagnostic `-g` link
+settings. This is not a fully optimized release-overhead measurement.
+
+#### Compile, link, execution and correctness results
+
+The patched optimizer built successfully. All matrix compilation/link steps
+and spill transformation succeeded; final `gc-roots` returned **0 in 29 s**.
+P requires the case marker, `GC ROOTS: 1 passed, 0 failed`, and exit 0.
+F means a failing case; A means an execution abort, not a pass.
+
+| Mode | locals | nested | temporary | runtime-internal | registered-global | unregistered-global | reclaim-control |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Native | P | P | P | P | P | P | P |
+| wasm64 default | F | F | F | F | P | F | P |
+| wasm64 static-roots | F | F | F | F | P | P | P |
+| wasm64 static-roots + Asyncify | A | A | A | A | A | A | A |
+| wasm64 static-roots + local patched spill | P | P | P | P | P | P | P |
+| wasm64 static-roots + test shadow slots | P | P | P | F | P | P | P |
+
+Exact spill markers (each case is a fresh process):
+
+```text
+CASE locals: PASS collections=64 internal-collections=0
+CASE nested: PASS collections=1 internal-collections=0
+CASE temporary: PASS collections=2 internal-collections=0
+CASE runtime-internal: PASS collections=62 internal-collections=62
+CASE registered-global: PASS collections=2 internal-collections=0
+CASE unregistered-global: PASS collections=2 internal-collections=0
+CASE reclaim-control: PASS collections=2 internal-collections=0
+```
+
+Each also prints `GC ROOTS: 1 passed, 0 failed`. In particular the
+runtime-internal case observes **62 collections while `assoc` is executing**,
+not just at call boundaries. The hidden-only reclaim control still passes;
+spilling has not simply made every tested object immortal. The other modes'
+first failures remain `CASE locals: FAIL collections=3 internal-collections=0`
+(default/static-roots), `CASE runtime-internal: FAIL collections=13 internal-collections=13`
+(shadow), and `Aborted(TypeError: Cannot convert null to a BigInt)` (Asyncify,
+with the same incompatible-with-`-fwasm-exceptions` warning). Exact per-case
+statuses/timings are in `artifacts/logs/wasm64-gc-roots.results` and adjacent logs.
+
+`startup-spill` returned **0**, after generation 0 / 1 s, compile/link 0 / 8 s,
+and comparison/transform/runs 0 / 10 s. Its identical pre-transform baseline
+still fails both `static-roots` and continuous re-entry before any marker:
+
+```text
+RuntimeError: function signature mismatch
+    at startup-spill.wasm.jank::runtime::reduce(jank::runtime::oref<jank::runtime::object>, jank::runtime::oref<jank::runtime::object>, jank::runtime::oref<jank::runtime::object>)
+```
+
+With spill, the single `static-roots` invocation prints:
+
+```text
+startup memory: phase=before-spike collections=1 heap-bytes=262144 free-bytes=221184 used-bytes=40960 gc-disabled=0
+jank -> Zig: scalar and wide result checks passed
+jank -> Zig: borrowed-buffer checks passed
+startup memory: phase=after-spike collections=15 heap-bytes=18784256 free-bytes=1847296 used-bytes=16936960 gc-disabled=0
+startup diagnostic: exit=0 collections=15 gc-disabled=0
+```
+
+The new driver `continuous` mode registers the same static roots and **never
+disables GC or forces a top-level collection**. Entry 1 uses the launcher;
+entries 2–20 call the already-loaded `spike.core/-main`, as in the safepoint
+experiment. Every iteration has both markers, a completion record and status
+0. Exact boundary records are:
+
+```text
+STARTUP ITERATION 1/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 2/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 3/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 4/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 5/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 6/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 7/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 8/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 9/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 10/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 11/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 12/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 13/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 14/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 15/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 16/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 17/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 18/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 19/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+STARTUP ITERATION 20/20: collections=15 used-bytes=16936960 heap-bytes=18784256 status=0
+startup diagnostic: exit=0 collections=15 gc-disabled=0
+STARTUP VERDICT: mode=continuous PASS iterations=20 passed=20 failed=0 exit=0
+STARTUP SPILL VERDICT: PASS
+```
+
+GC advances 1 → 15 inside the first entry, but **does not run again during
+entries 2–20**: GC remains enabled and this small re-entry workload does not
+trigger it. This is not evidence for another collection inside every re-entry.
+The validator requires exact per-iteration markers, ordered completion records,
+nondecreasing collection counts, at least one observed collection overall,
+GC enabled at completion and clean exit. Logs/results use
+`artifacts/logs/wasm64-startup-spill-*` and `wasm64-startup-spill.results`.
+
+#### Size, timing and remaining coverage gaps
+
+The before/after sizes below compare each **same named module** immediately
+before and after the pass, not a stripped baseline against a debug spill build.
+No post-spill optimization was requested.
+
+| Module | Before bytes | Spill bytes | Increase |
+| --- | ---: | ---: | ---: |
+| gc-roots | 6,148,239 | 6,943,464 | 795,225 / 12.934% |
+| startup/spike | 10,531,766 | 17,468,899 | 6,937,133 / 65.869% |
+
+Excluding all custom sections (summing only standard sections plus the Wasm
+header) gives 1,372,132 → 2,168,478 bytes for gc-roots (+58.037%) and
+4,497,408 → 11,436,015 for the spike (+154.280%). Debug metadata therefore
+substantially dilutes the percentage increase in total file size. Transform
+timing is printed in the `SPILL:` records, separately from execution.
+
+A valid continuous-GC runtime ratio is **unavailable**, because the unspilled
+baseline traps. For a matched successful comparison, the harness runs
+`no-gc-reentry` (GC disabled) three times before and after spill, requiring all
+20 pairs of markers in every sample. Whole-Node-process times, including
+module compilation/instantiation and startup, were:
+
+| Module | Three samples, seconds | Median, seconds |
+| --- | --- | ---: |
+| Unspilled | 0.198916, 0.248338, 0.196827 | 0.198916 |
+| Spill | 0.945992, 1.124221, 1.216419 | 1.124221 |
+
+That is **5.652× elapsed time (+465.2%)**, not a steady-state instruction-only
+benchmark. The matrix and startup comparison ran concurrently on this machine;
+CPU contention and cold compilation contribute. The successful spill
+continuous-GC run took 0.950072 s, the single-entry spill run 0.958900 s.
+Neither is comparable to the fast **failed** unspilled run. No overhead
+improvement or production performance claim is made.
+
+A focused WAT/Node check inspects the actual linear-memory shadow stack during
+an imported collection callback, using a `0xFFFA`-tagged i64. It checks direct
+calls, indirect calls, explicit return restoration and omission of i32 locals:
+
+```sh
+docker exec --user 1000:1000 jank-host-build artifacts/build-binaryen/bin/wasm-opt \
+  wasm-probe/spill-memory64.wat --enable-memory64 --spill-pointers -g \
+  -o artifacts/gc-roots/spill-memory64.wasm
+docker exec --user 1000:1000 jank-host-build .tools/node-v26.13.1-linux-x64/bin/node \
+  wasm-probe/spill-memory64.mjs artifacts/gc-roots/spill-memory64.wasm
+python3 wasm-probe/startup-safepoints-check-test.py
+```
+
+Observed callback results:
+
+```text
+SPILL COVERAGE: direct shadow-root=true stack-restored=true
+SPILL COVERAGE: indirect shadow-root=true stack-restored=true
+SPILL COVERAGE: early shadow-root=true stack-restored=true
+SPILL COVERAGE: nonpointer shadow-root=false stack-restored=true
+SPILL COVERAGE: operand shadow-root=false stack-restored=true
+```
+
+The last line is a **demonstrated limitation**, not a GC retention success:
+`consume(local.get value, call collect)` leaves the value only on the Wasm
+operand stack while the second argument collects. It is no longer a live
+local at that call, so the pass does not spill it. In source,
+`spillPointersAroundCall` moves operands into new temporaries **after** its
+original-local liveness analysis; it does not analyze/spill arbitrary operand
+stack values. This does not invalidate the measured C++ cases, which all pass,
+but forbids claiming the pass makes arbitrary Wasm expressions GC-safe.
+No extra flattening pass or broader spilling-policy patch was tried.
+
+Exception-edge/root coverage and cleanup are **not verified**. `getStackSpace`
+only inserts restoration at explicit returns and normal function completion;
+the patch does not add unwind cleanup. Existing LLVM handlers can also write
+the stack-pointer global. The experiment does not establish correct interaction
+with arbitrary throws/catches, tail calls, callbacks, stack overflow, browser
+engines, concurrency, high Wasm addresses, or all runtime operations. It still
+requires explicit static roots. The fixture/detector and conservative
+false-positive limitations of the lifetime matrix remain.
+
+Regression checks: the existing safepoint and churn runs still pass 20/20;
+the per-iteration checker has nine passing tests covering normal modes, empty
+logs, bad markers, nonzero exits, bad iteration/count sequences and wrong GC
+state. No native compiler/runtime source changed; the native differential row
+passes all seven cases, but the full native suite was not rerun for this step.
 
 ## Files
 

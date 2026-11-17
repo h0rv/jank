@@ -1,0 +1,29 @@
+diff --git a/src/abi/stack.h b/src/abi/stack.h
+--- a/src/abi/stack.h
++++ b/src/abi/stack.h
+@@ -61,5 +61,10 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
+                          builder.makeGlobalGet(stackPointer->name, pointerType),
+                          builder.makeConst(int32_t(size)));
++  } else if (pointerType == Type::i64) {
++    added =
++      builder.makeBinary(SubInt64,
++                         builder.makeGlobalGet(stackPointer->name, pointerType),
++                         builder.makeConst(int64_t(size)));
+   } else {
+     WASM_UNREACHABLE("unhandled pointerType");
+   }
+@@ -67,10 +72,12 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
+     stackPointer->name, builder.makeLocalTee(local, added, pointerType)));
+   auto makeStackRestore = [&]() {
+     return builder.makeGlobalSet(
+       stackPointer->name,
+-      builder.makeBinary(AddInt32,
++      builder.makeBinary(pointerType == Type::i64 ? AddInt64 : AddInt32,
+                          builder.makeLocalGet(local, pointerType),
+-                         builder.makeConst(int32_t(size))));
++                         pointerType == Type::i64
++                           ? builder.makeConst(int64_t(size))
++                           : builder.makeConst(int32_t(size))));
+   };
+   // add stack restores to the returns
+   FindAllPointers<Return> finder(func->body);

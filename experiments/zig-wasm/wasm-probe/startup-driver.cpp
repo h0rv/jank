@@ -57,23 +57,27 @@ int main(int argc, char const **argv)
 {
   bool const with_churn{ argc > 1 && std::strcmp(argv[1], "safepoint-churn") == 0 };
   bool const collect_at_safepoints{ with_churn || (argc > 1 && std::strcmp(argv[1], "safepoint") == 0) };
+  bool const continuous{ argc > 1 && std::strcmp(argv[1], "continuous") == 0 };
+  bool const no_gc_reentry{ argc > 1 && std::strcmp(argv[1], "no-gc-reentry") == 0 };
+  bool const repeated{ collect_at_safepoints || continuous || no_gc_reentry };
+  char const *const prefix{ collect_at_safepoints ? "SAFEPOINT" : "STARTUP" };
   long iterations{ 20 };
-  if(collect_at_safepoints && argc > 2)
+  if(repeated && argc > 2)
   {
     char *end{};
     iterations = std::strtol(argv[2], &end, 10);
     if(!*argv[2] || *end || iterations < 1 || iterations > 10000)
     {
-      std::fprintf(stderr, "safepoint iterations must be an integer in [1, 10000]\n");
+      std::fprintf(stderr, "startup iterations must be an integer in [1, 10000]\n");
       return 2;
     }
   }
-  if(argc > 1 && std::strcmp(argv[1], "no-gc") == 0)
+  if(no_gc_reentry || (argc > 1 && std::strcmp(argv[1], "no-gc") == 0))
   {
     GC_disable();
   }
 #ifdef __EMSCRIPTEN__
-  else if(collect_at_safepoints || (argc > 1 && std::strcmp(argv[1], "static-roots") == 0))
+  else if(collect_at_safepoints || continuous || (argc > 1 && std::strcmp(argv[1], "static-roots") == 0))
   {
     GC_init();
     GC_add_roots(&__global_base, &__data_end);
@@ -86,23 +90,23 @@ int main(int argc, char const **argv)
     safepoint("before-spike");
   }
   memory("before-spike");
-  if(collect_at_safepoints)
+  if(repeated)
   {
     int status{};
     for(long iteration{ 1 }; iteration <= iterations; ++iteration)
     {
-      std::printf("SAFEPOINT BEGIN: iteration=%ld/%ld\n", iteration, iterations);
+      std::printf("%s BEGIN: iteration=%ld/%ld\n", prefix, iteration, iterations);
       std::fflush(stdout);
       if(iteration == 1) { status = jank_spike_main(argc, argv); }
       else { reenter(); }
-      safepoint("after-entry");
+      if(collect_at_safepoints) { safepoint("after-entry"); }
       if(with_churn)
       {
         churn();
         safepoint("after-churn");
       }
-      std::printf("SAFEPOINT ITERATION %ld/%ld: collections=%zu used-bytes=%zu heap-bytes=%zu status=%d\n",
-                  iteration, iterations, static_cast<size_t>(GC_get_gc_no()),
+      std::printf("%s ITERATION %ld/%ld: collections=%zu used-bytes=%zu heap-bytes=%zu status=%d\n",
+                  prefix, iteration, iterations, static_cast<size_t>(GC_get_gc_no()),
                   GC_get_heap_size() - GC_get_free_bytes(), GC_get_heap_size(), status);
       std::fflush(stdout);
       if(status) { return status; }

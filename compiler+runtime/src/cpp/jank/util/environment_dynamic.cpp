@@ -148,6 +148,12 @@ namespace jank::util
       sb(def);
     }
 
+    sb(".reader-features.");
+    for(auto const &feature : util::cli::opts.reader_features)
+    {
+      sb(feature.size())(":")(feature);
+    }
+
     auto const input(
       util::format("{}.{}.{}.{}.{}.{}",
                    JANK_VERSION,

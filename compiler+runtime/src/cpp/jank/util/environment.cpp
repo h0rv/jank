@@ -87,6 +87,8 @@ namespace jank::util
   {
 #if defined(__EMSCRIPTEN__)
     throw std::runtime_error{ "Executable paths are unavailable on Emscripten" };
+#elif defined(__wasi__)
+    throw std::runtime_error{ "Executable paths are unavailable on WASI" };
 #elif defined(__APPLE__)
     u32 path_length{};
     if(_NSGetExecutablePath(nullptr, &path_length) != -1 || path_length <= 1)

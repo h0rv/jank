@@ -1,0 +1,11 @@
+{
+  "name": "spike",
+  "main": "spike.core",
+  "jank": "jank/src",
+  "zig": "native.zig",
+  "expect": [
+    "jank -> Zig: scalar and wide result checks passed",
+    "jank -> Zig: borrowed-buffer checks passed"
+  ],
+  "wasm_check": "spike-continuous"
+}

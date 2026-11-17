@@ -3,12 +3,14 @@
 #include <jank/read/parse.hpp>
 #include <jank/error/parse.hpp>
 #include <jank/util/escape.hpp>
+#include <jank/util/cli.hpp>
 #include <jank/runtime/visit.hpp>
 #include <jank/runtime/context.hpp>
 #include <jank/runtime/core.hpp>
 #include <jank/runtime/core/meta.hpp>
 #include <jank/runtime/obj/symbol.hpp>
 #include <jank/runtime/obj/ratio.hpp>
+#include <jank/runtime/obj/persistent_hash_set.hpp>
 #include <jank/runtime/behavior/map_like.hpp>
 #include <jank/runtime/behavior/set_like.hpp>
 #include <jank/runtime/sequence_range.hpp>
@@ -20,6 +22,20 @@
 namespace jank::read::parse
 {
   using namespace jank::runtime;
+
+  /* AI-assisted research: source reader features selected by the build driver. */
+  object_ref configured_features()
+  {
+    static auto const features([] {
+      auto ret(obj::persistent_hash_set::empty());
+      for(auto const &feature : util::cli::opts.reader_features)
+      {
+        ret = ret->conj(__rt_ctx->intern_keyword(feature).expect_ok());
+      }
+      return ret;
+    }());
+    return features;
+  }
 
   static bool is_utf8_char(jtl::immutable_string const &s)
   {

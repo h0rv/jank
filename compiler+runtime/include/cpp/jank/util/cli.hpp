@@ -104,6 +104,7 @@ namespace jank::util::cli
     /* Runtime. */
     jtl::immutable_string target_config;
     jtl::immutable_string module_path;
+    native_vector<jtl::immutable_string> reader_features;
     jtl::immutable_string profiler_file{ "jank.profile" };
     bool profiler_enabled{};
     bool perf_profiling_enabled{};

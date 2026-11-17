@@ -1,11 +1,13 @@
 <!doctype html>
-<!-- AI-assisted experimental jank + Zig memory64 runner. -->
+<!-- AI-assisted experimental jank memory64 runner. -->
 <html lang="en" data-status="running">
 <meta charset="utf-8">
-<title>jank + Zig: running</title>
-<h1>jank + Zig (experimental wasm64)</h1>
+<title>jank: running</title>
+<h1>jank (experimental wasm64)</h1>
+<pre id="app"></pre>
 <pre id="stdout"></pre>
 <script>
+  const config = __PROJECT_CONFIG__;
   const output = document.getElementById('stdout');
   const lines = [];
   function write(line) {
@@ -14,24 +16,28 @@
   }
   function finish(ok) {
     document.documentElement.dataset.status = ok ? 'pass' : 'fail';
-    document.title = 'jank + Zig: ' + (ok ? 'PASS' : 'FAIL');
+    document.title = 'jank: ' + (ok ? 'PASS' : 'FAIL');
   }
   window.addEventListener('error', event => { write(event.message); finish(false); });
   window.addEventListener('unhandledrejection', event => { write(event.reason); finish(false); });
   var Module = {
-    arguments: ['continuous', '20'],
+    arguments: config.arguments,
     print: write,
-    printErr: write,
+    printErr: line => { console.error(line); },
     onAbort: reason => { write(reason); finish(false); },
     onExit: status => {
       const count = marker => lines.filter(line => line === marker).length;
-      finish(status === 0 &&
-        count('jank -> Zig: scalar and wide result checks passed') === 20 &&
-        count('jank -> Zig: borrowed-buffer checks passed') === 20 &&
+      const allLines = [...lines, ...document.getElementById('app').textContent.split('\n')];
+      finish(status === 0 && config.expect.every(line => allLines.includes(line)) &&
+        (!config.continuous || (config.expect.every(line => count(line) === 20) &&
         lines.some(line => /^STARTUP ITERATION 20\/20: .*status=0$/.test(line)) &&
-        lines.some(line => /^startup diagnostic: exit=0 collections=[1-9]\d* gc-disabled=0$/.test(line)));
+        lines.some(line => /^startup diagnostic: exit=0 collections=[1-9]\d* gc-disabled=0$/.test(line)))));
     }
   };
 </script>
-<script src="spike.js"></script>
+<script>
+  const runner = document.createElement('script');
+  runner.src = config.script;
+  document.body.appendChild(runner);
+</script>
 </html>

@@ -6,8 +6,11 @@
   #endif
 
   #include <windows.h>
-#else
+#elif !defined(__wasi__)
   #include <sys/ioctl.h>
+#endif
+
+#if !defined(_WIN32)
   #include <unistd.h>
 #endif
 
@@ -31,6 +34,8 @@ namespace jtl::terminal
                static_cast<usize>(csbi.srWindow.Bottom - csbi.srWindow.Top + 1) };
     }
 
+    return default_size();
+#elif defined(__wasi__)
     return default_size();
 #else
     winsize w{};

@@ -5,11 +5,13 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-spec = importlib.util.spec_from_file_location('jank_zig', ROOT / 'scripts/jank-zig.py')
+spec = importlib.util.spec_from_file_location('jank_build', ROOT / 'scripts/jank-build.py')
 driver = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = driver
 spec.loader.exec_module(driver)
 source = ROOT / '.tools/binaryen-a9141c8cc'
 patch = ROOT / 'wasm-probe/binaryen-memory64-stack.patch'
@@ -24,6 +26,6 @@ if source.is_dir():
         print(f'Preserving obsolete private Binaryen source at {backup}', flush=True)
         shutil.move(str(source), backup)
 
-driver.prerequisites()
+driver.prerequisites(driver.load_project())
 driver.logged('wasi-native-spike', driver.docker('bash', ROOT / 'scripts/build-host-linux.sh', 'spike'))
 driver.logged('wasi-startup-spill', driver.docker('bash', ROOT / 'scripts/build-wasm64-target.sh', 'startup-spill'))

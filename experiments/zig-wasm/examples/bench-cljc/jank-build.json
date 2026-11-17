@@ -1,0 +1,5 @@
+{
+  "name": "bench-cljc",
+  "main": "bench.core",
+  "expect": ["BENCH PASS"]
+}

@@ -1,0 +1,9 @@
+{
+  "name": "hello",
+  "main": "hello.core",
+  "expect": {
+    "native": ["platform: native", "weighted buffer: 30", "hello: checks passed"],
+    "node": ["platform: node", "weighted buffer: 30", "hello: checks passed"],
+    "browser": ["platform: browser", "weighted buffer: 30", "hello: checks passed"]
+  }
+}

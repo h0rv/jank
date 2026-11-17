@@ -1,4 +1,4 @@
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   #include <cpptrace/cpptrace.hpp>
 #endif
 
@@ -171,7 +171,7 @@ namespace jank::error
     return make_error(kind::analyze_unresolved_symbol, message, source, expansion);
   }
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   error_ref analyze_macro_expansion_exception(std::exception const &e,
                                               cpptrace::raw_trace const &trace,
                                               read::source const &source,

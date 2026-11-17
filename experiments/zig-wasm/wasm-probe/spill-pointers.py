@@ -17,7 +17,8 @@ start = time.monotonic()
 features = ['--enable-memory64', '--enable-exception-handling', '--enable-bulk-memory',
             '--enable-mutable-globals', '--enable-nontrapping-float-to-int', '--enable-sign-ext',
             '--enable-reference-types', '--enable-multivalue']
-subprocess.run([str(optimizer), str(baseline), *features, '--flatten', '--spill-pointers', '-g',
+subprocess.run([str(optimizer), str(baseline), *features, '--flatten', '--spill-pointers',
+                '--reorder-locals', '--coalesce-locals', '--reorder-locals', '-g',
                 '-o', str(transformed)], check=True)
 transformed.replace(wasm)
 print(f'SPILL: input-bytes={baseline.stat().st_size} output-bytes={wasm.stat().st_size} '

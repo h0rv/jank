@@ -142,12 +142,13 @@ PY
       exit 2
     fi
     run "$variant-generate" generate_spike
-    run "$variant-compile" python3 - "$ROOT" "$variant" <<'PY'
+    run "$variant-compile" python3 - "$ROOT" "$variant" "$BITS" <<'PY'
 import json, os, pathlib, shlex, subprocess, sys
 root = pathlib.Path(sys.argv[1])
-out = root / 'artifacts/wasm64-spike'
+bits = sys.argv[3]
+out = root / f'artifacts/wasm{bits}-spike'
 app = pathlib.Path(os.environ['JANK_ZIG_APP'])
-build = root / 'artifacts/build-wasm64'
+build = root / f'artifacts/build-wasm{bits}'
 variant = sys.argv[2]
 database = json.loads((build / 'compile_commands.json').read_text())
 entry = next(x for x in database if x['file'].endswith('/src/cpp/jank/runtime/context.cpp'))
@@ -169,11 +170,12 @@ for source, label, extra in sources:
                    cwd=entry['directory'], check=True)
     objects.append(str(obj))
 subprocess.run([str(root / '.tools/zig-x86_64-linux-0.17.1/zig'), 'build-obj',
-                str(app / 'native.zig'), '-target', 'wasm64-freestanding', '-O', 'ReleaseSafe',
+                str(app / 'native.zig'), '-target', f'wasm{bits}-freestanding', '-O', 'ReleaseSafe',
                 f'-femit-bin={out / (variant + "-zig.o")}',
                 '--cache-dir', str(root / '.zig-cache'),
                 '--global-cache-dir', str(root / '.zig-cache/global')], check=True)
-subprocess.run([flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1', '-fwasm-exceptions',
+subprocess.run([flags[0], '-O2', '-g', '--profiling-funcs',
+                *(['-sMEMORY64=1'] if bits == '64' else []), '-fwasm-exceptions',
                 '-sALLOW_MEMORY_GROWTH=1',
                 *(['-sSTACK_SIZE=4194304'] if variant == 'startup-spill' else []),
                 *(['-sEXIT_RUNTIME=1'] if os.environ.get('JANK_ZIG_APP_MODE') == '1' else []),
@@ -182,7 +184,7 @@ subprocess.run([flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1', '-fw
                 '-o', str(out / (variant + '.js'))], check=True)
 PY
     if [[ "$variant" == startup-spill ]]; then
-      run startup-spill python3 "$ROOT/wasm-probe/startup-spill.py" "$ROOT" "$iterations"
+      run startup-spill python3 "$ROOT/wasm-probe/startup-spill.py" "$ROOT" "$iterations" "$BITS"
       exit 0
     fi
     failed=0

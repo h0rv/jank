@@ -11,6 +11,8 @@
 #include <jank/runtime/obj/nil.hpp>
 #include <jank/runtime/obj/number.hpp>
 
+#define JANK_NAN_BOXING (__SIZEOF_POINTER__ == 8)
+
 /* During AOT codegen, we need to initialize a bunch of lifted constants and globals, but
  * the jank_nil global may not yet be initialized, since the order of initialization of globals
  * across C++ translation units is not defined. In the default initialization or oref, we
@@ -110,39 +112,63 @@ namespace jank::runtime
     constexpr i32 min_small_integer{ std::numeric_limits<i32>::min() };
     constexpr i32 max_small_integer{ std::numeric_limits<i32>::max() };
 
-    inline bool is_tagged_small_real(void * const val)
+    inline bool is_tagged_small_real([[maybe_unused]] void * const val)
     {
+#if JANK_NAN_BOXING
       auto const bits{ std::bit_cast<u64>(val) };
       return bits < max_real;
+#else
+      return false;
+#endif
     }
 
-    inline bool is_tagged_small_int(void * const val)
+    inline bool is_tagged_small_int([[maybe_unused]] void * const val)
     {
+#if JANK_NAN_BOXING
       return (std::bit_cast<u64>(val) & ~integer_value_mask) == integer_nan_tag;
+#else
+      return false;
+#endif
     }
 
-    inline bool is_tagged_pointer(void * const val)
+    inline bool is_tagged_pointer([[maybe_unused]] void * const val)
     {
+#if JANK_NAN_BOXING
       return (std::bit_cast<u64>(val) & ~pointer_value_mask) == pointer_nan_tag;
+#else
+      return false;
+#endif
     }
 
     inline f64 as_real(void * const val)
     {
       jank_debug_assert(is_tagged_small_real(val));
+#if JANK_NAN_BOXING
       return std::bit_cast<f64>(val);
+#else
+      return static_cast<obj::real *>(val)->data;
+#endif
     }
 
     inline i32 as_integer(void * const val)
     {
       jank_debug_assert(is_tagged_small_int(val));
+#if JANK_NAN_BOXING
       return static_cast<i32>(std::bit_cast<u64>(val) & integer_value_mask);
+#else
+      return static_cast<i32>(static_cast<obj::integer *>(val)->data);
+#endif
     }
 
     template <typename T>
     T *as_pointer(T * const val)
     {
+#if JANK_NAN_BOXING
       jank_debug_assert(is_tagged_pointer(val));
       return std::bit_cast<T *>(std::bit_cast<u64>(val) & pointer_value_mask);
+#else
+      return val;
+#endif
     }
 
     /* This type, and the `untagged` helper functions, are used when constructing an `oref` from
@@ -183,28 +209,45 @@ namespace jank::runtime
       return untagged_ptr{ static_cast<object *>(const_cast<jtl::remove_const_t<T> *>(data)) };
     }
 
+#if !JANK_NAN_BOXING
+    object *box_number(i32 val);
+    object *box_number(f64 val);
+#endif
+
     template <typename T>
     T tag(i32 const val)
     {
+#if JANK_NAN_BOXING
       return std::bit_cast<T>(integer_nan_tag
                               | (static_cast<u64>(static_cast<u32>(val)) & integer_value_mask));
+#else
+      return reinterpret_cast<T>(box_number(val));
+#endif
     }
 
     template <typename T>
     T tag(f64 const d)
     {
+#if JANK_NAN_BOXING
       return std::bit_cast<T>(d);
+#else
+      return reinterpret_cast<T>(box_number(d));
+#endif
     }
 
     template <typename T>
     T tag(untagged_ptr const ptr)
     {
+#if JANK_NAN_BOXING
       auto const val{ reinterpret_cast<u64>(ptr.data) };
       /* Our pointers are expected to fit within 48 bits. */
       //jank_debug_assert((val & ~pointer_value_mask) == 0);
       /* Our pointers are expected to have all low bits unset. */
       jank_debug_assert((val & 0b111) == 0);
       return reinterpret_cast<T>(pointer_nan_tag | val);
+#else
+      return reinterpret_cast<T>(ptr.data);
+#endif
     }
   }
 

@@ -5,7 +5,7 @@
 
 #include <folly/Synchronized.h>
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   #include <cpptrace/cpptrace.hpp>
 #endif
 
@@ -60,7 +60,7 @@ namespace jank::jit
   void install_object_tracking_plugin();
   void register_loaded_object(uptr resource_key, loaded_object const &object);
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   cpptrace::stacktrace_frame resolve_materialized_object_frame(cpptrace::stacktrace_frame frame);
 #endif
 }

@@ -1061,7 +1061,7 @@ namespace jank::read::lex
             auto number_start{ token_start.offset };
             if(file[token_start] == '-' || file[token_start] == '+')
             {
-              number_start = token_start + 1llu;
+              number_start = token_start + usize{ 1 };
               found_beginning_negative = file[token_start] == '-';
             }
             if(found_r)
@@ -1080,7 +1080,7 @@ namespace jank::read::lex
                                radix),
                   { token_start, pos });
               }
-              number_start = r_pos + 1llu;
+              number_start = r_pos + usize{ 1 };
             }
             else if(radix == 16)
             {
@@ -1411,7 +1411,7 @@ namespace jank::read::lex
                 }
 
                 ++pos;
-                if(pos == token_start + 2llu)
+                if(pos == token_start + usize{ 2 })
                 {
                   return ok(token{ token_start, pos, token_kind::comment, ""sv });
                 }

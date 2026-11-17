@@ -5,7 +5,7 @@
 #include <cxxabi.h>
 #include <charconv>
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   #include <cpptrace/basic.hpp>
 #endif
 
@@ -24,6 +24,18 @@
 
 namespace jank::runtime
 {
+#if !JANK_NAN_BOXING
+  object *detail::box_number(i32 const val)
+  {
+    return make_box<obj::integer>(static_cast<i64>(val)).ptr();
+  }
+
+  object *detail::box_number(f64 const val)
+  {
+    return make_box<obj::real>(val).ptr();
+  }
+#endif
+
   bool not_(object_ref const o)
   {
     if(runtime::is_nil(o))
@@ -1344,7 +1356,7 @@ namespace jank::runtime
   ex_info(jtl::immutable_string const &message, object_ref const data, object_ref const cause)
   {
     auto const ret{ make_box<obj::exception_info>(message, data) };
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     ret->raw_trace = std::make_unique<cpptrace::raw_trace>(cpptrace::generate_raw_trace());
 #endif
     if(cause.is_some())

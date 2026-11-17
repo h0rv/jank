@@ -52,43 +52,81 @@ The GC experiment pins Emscripten 7.0.0 and Boehm commit `91f30f37b0457566e9823b
 
 ### One command: native + Wasm
 
-This AI-assisted Linux x86_64 research wrapper builds the same jank and Zig
-sources for both targets from the host shell:
+This AI-assisted Linux x86_64 research wrapper builds the same jank sources
+for native and Wasm from the host shell. Zig is an optional native-library
+input, not what enables the Wasm build: Emscripten's Clang/LLVM compiles and
+links jank's generated C++ and runtime for Wasm.
+
+See [Using Zig with jank](ZIG.md) for library integration and measured toolchain trade-offs.
 
 ```sh
 cd experiments/zig-wasm
-./jank-zig build
-./jank-zig check
-./jank-zig run native       # Ubuntu 24.04 executable, run in the container
-./jank-zig run node
-./jank-zig run browser      # opens Chrome; keeps its local server running
-./jank-zig serve            # http://127.0.0.1:8765/; Ctrl-C to stop
+./jank-build build
+./jank-build check
+./jank-build run native       # Ubuntu 24.04 executable, run in the container
+./jank-build run node
+./jank-build run browser      # opens Chrome; keeps its local server running
+./jank-build serve            # http://127.0.0.1:8765/; Ctrl-C to stop
 ```
 
-`build [app-dir]` defaults to this experiment. An alternative app directory
-must contain `native.zig` and `jank/src/spike/core.jank`, with namespace
-`spike.core`, entry point `-main`, the same Zig C ABI and success markers.
-An optional `build.zig` can customize the Zig library build (library name
-`spike`); otherwise the default is reused. This is a spike-layout driver, not
-a general project/package format. Sources are copied into ignored staging
-before compilation; input directories are not modified.
+Every command accepts an optional final project directory, defaulting to this
+experiment's Zig interop spike. `jank-zig` remains a thin alias forwarding all
+arguments unchanged. A project contains `jank-build.json`; the driver falls
+back to `jank-zig.json` only when the new filename is absent:
 
-Outputs are `artifacts/app/native/spike` and
-`artifacts/app/wasm/{spike.js,spike.wasm,index.html}`. The native executable
+```json
+{"name": "hello", "main": "hello.core", "jank": "src",
+ "expect": ["hello: checks passed"]}
+```
+
+`main` names the namespace whose `-main` runs. Defaults are the directory name
+for `name` and `src` for `jank`; source paths must stay inside the project.
+Omit `zig` for pure-jank projects: no Zig SDK, library build or kernel object
+is needed. Native C++ then uses the container's Clang 23 with libstdc++.
+`expect` is required and contains nonempty exact output
+lines, or an object with `native`, `node`, and `browser` line lists. Checks
+require exit 0 **and** those lines (jank AOT can exit 0 after a failed assert).
+To link an optional Zig library, add `"zig": "native.zig"` (or another root
+source path). For those projects, `build.zig` overrides the generated library
+build and must install both static/shared libraries named `name`; the Wasm kernel compiles
+directly from `zig`. Multi-file Zig imports relative to that root are supported.
+Sources are copied into fresh ignored staging for each platform, including all
+transitively emitted jank modules; inputs are not modified. Project names must
+be unique within this checkout's output directory.
+
+```sh
+./jank-build check examples/hello-cljc  # pure jank; native, Node and Chrome
+./jank-build run browser examples/hello-cljc
+./jank-zig check examples/hello-cljc    # legacy alias, same command
+```
+
+This pure-jank example computes the weighted sum of `[1 2 3 4]` as 30 and shares
+its logic and checks across three namespaces. Its `hello/platform.cljc` selects
+a thin output layer with `#?(:wasm ... :native ...)`: native stdout, browser `#app`, or
+Node console. Host jank receives repeatable `--reader-feature native` or
+`--reader-feature wasm` during source generation; features also separate its
+binary-version cache. `:jank` still matches both builds, so put platform branches
+before a `:jank` fallback. Explicit `read-string` reader options are unchanged.
+
+Outputs are `artifacts/app/<name>/native/<name>` and
+`artifacts/app/<name>/wasm/{<name>.js,<name>.wasm,index.html}`. The native executable
 contains the static jank runtime, but still needs Ubuntu 24.04-compatible
 system libraries; it is not a statically linked portable Linux binary.
-The Wasm JS defaults to continuous-GC mode, including when invoked directly
-with Node. The page displays stdout and sets `data-status="pass"` on the root
-element and a PASS title only after all 20 marker pairs and final GC-enabled
-completion. `check` requires native, Node and headless Chrome success and
+Generic Wasm projects run once in `static-roots` mode. The spike config retains
+`"wasm_check": "spike-continuous"`: 20 continuous-GC iterations validated by
+the existing safepoint checker for Node and browser. The generated page displays
+stdout and provides `#app` for DOM output; it sets `data-status="pass"` and a PASS
+title only after exit 0 and all expected lines. `check` rebuilds the project,
+requires native, Node and headless Chrome success and
 prints a verdict table. Logs and browser DOM evidence are in
 `artifacts/logs/app/`. `serve --port N` selects another port.
 
 Docker, Python 3, curl, tar, Git and (for browser commands) `google-chrome`
 must already be available on the host. The wrapper creates/starts the
 `jank-host-build` Ubuntu 24.04 container, installs its documented pinned LLVM
-23.1.6 dependencies **inside the container only**, downloads local Zig
-0.17.1/Node 26.13.1/Emscripten 7.0.0, initializes pinned submodules, and builds
+23.1.6 dependencies **inside the container only**, downloads local Node
+26.13.1/Emscripten 7.0.0 (and Zig 0.17.1 only for projects with `zig`),
+initializes pinned submodules, and builds
 missing host/native/Wasm runtime artifacts and the private patched Binaryen.
 Existing prerequisites are reused; app outputs are rebuilt each invocation.
 If compiler/runtime sources change, explicitly refresh the prerequisite builds
@@ -1461,7 +1499,8 @@ and the same `-O2 -g --profiling-funcs -sALLOW_MEMORY_GROWTH=1` settings.
 The helper defaults to `artifacts/build-binaryen/bin/wasm-opt` (override via
 `SPILL_WASM_OPT`), saves a `.unspilled.wasm`, then transforms in place only after
 successful output. These commands always freshly link before transforming.
-No optimizer is run after spilling, so nothing later removes the stores.
+In this initial run no optimizer was run after spilling. The later compact-locals
+follow-up below supersedes that pipeline.
 
 The standalone invocation enables the input's Emscripten features explicitly:
 memory64, exception-handling, bulk-memory, mutable-globals, nontrapping float
@@ -1661,6 +1700,297 @@ logs, bad markers, nonzero exits, bad iteration/count sequences and wrong GC
 state. No native compiler/runtime source changed; the native differential row
 passes all seven cases, but the full native suite was not rerun for this step.
 
+### Release-build spill cost (AI-assisted measurement)
+
+Measured on the x86-64 Intel Xeon/KVM host (8 vCPUs), entirely in the
+`ubuntu:24.04` `jank-host-build` container bootstrapped by `jank-zig`.
+Updated after merging PR #14 (`origin/main` at `f39bf5ec2`). Zig is **0.17.1**,
+Node **26.13.1**, Emscripten **7.0.0**; Binaryen is `a9141c8cc` with main's
+expanded memory64/EH-cleanup/fresh-slot-zeroing patch (SHA-256
+`e226384854712c6d94cbda84685d4fe427c9a1c2d159aae5dcb76dd3fd60bf92`).
+The existing container/runtime archives were reused, and Binaryen was rebuilt
+after reversing the old patch before applying the new one. Seven fresh processes
+per row, sequentially, without concurrent builds; medians below. No CPU pinning
+or frequency control was applied, so these are bounded probe measurements.
+
+| Variant | GC during execution | Raw binary/Wasm bytes | gzip bytes | Node start → pre-jank, ms | Re-entry, µs/call | Correctness |
+| --- | --- | ---: | ---: | ---: | ---: | --- |
+| Native | Enabled | 9,208,344 | 2,646,554 | N/A | 1.564 | PASS |
+| wasm64, no flatten/spill, static roots | Disabled | 10,496,398 | 2,029,926 | 37.619 | 3.790 | PASS |
+| wasm64, flatten + spill, static roots | Disabled (matched control) | 25,453,001 | 5,874,035 | 64.521 | 7.236 | PASS |
+| wasm64, flatten + spill, static roots | Enabled | 25,453,001 | 5,874,035 | 60.757 | 7.455 | PASS |
+
+**Matched GC-disabled cost: 2.425× raw size (+142.5%), 2.894× gzip size,
+and 1.909× steady re-entry time (+90.9%).** The startup column ends **before
+jank initialization**, not before just the repeated calls. Separately timing
+the generated launcher's entire first entry (jank/core initialization plus the
+first spike call) gives **119.737 → 3,227.713 ms**, or **26.96×**, with GC
+disabled. Native first entry is 64.247 ms; spill/GC-enabled is 3,222.846 ms.
+Thus the very large whole-process ratio is not just module instantiation:
+first-entry work, potentially including lazy engine compilation, dominates.
+No profiling split between core loading, lazy compilation and spill-slot
+zeroing was attempted; attributing all of that cost to any one is unwarranted.
+
+| Comparison | Raw size increase | Timing and scope |
+| --- | ---: | --- |
+| PR #12, spill only, older private patch | +65.869% | 5.652×, whole Node process / 20 entries |
+| PR #14, flatten/spill, EH cleanup and zeroing | +142.039% | 22.704×, whole Node process / 20 entries |
+| This probe, current main's pipeline | +142.493% | 1.715× pre-jank startup; 26.96× first entry; **1.909× warm re-entry** |
+
+The two historical results and this run all use optimized **`-O2 -g`** app
+builds with a Release runtime, not demonstrated `-O0` Debug builds. Retained
+names/debug metadata dilute raw size percentages: the current `--strip-debug`
+companions are **4,447,936 → 17,085,107 bytes (+284.1%)**, without changing
+code optimization. Only the original named/debug binaries are timed. The
+PR #14 whole-process samples also ran alongside the matrix, unlike this run.
+The previous version of this section's +302.2% / 1.379× result used the older
+patch, a 16-MiB stack, extra pre-transform `wasm-opt -O2`, and stripped outputs;
+it is superseded, not a measurement of current main. This run uses main's
+exact pass order, patch and 4-MiB stack, with no extra optimization pass.
+We did not rerun spill-only or an all-`-O0` runtime build. These measurements
+do not isolate individual pass costs or establish general GC safety.
+
+Reproduce from `experiments/zig-wasm`:
+
+```sh
+./jank-zig build
+docker exec --user 1000:1000 jank-host-build \
+  python3 scripts/measure-spill-cost.py --self-test
+docker exec --user 1000:1000 jank-host-build \
+  python3 scripts/measure-spill-cost.py > artifacts/logs/spill-cost.log 2>&1
+cat artifacts/spill-cost/results.json
+```
+
+For pre-PR-#14 SDK trees, first reverse the old private Binaryen patch or
+re-extract the pinned source archive: the expanded patch requires a clean
+`a9141c8cc` tree, as described in the follow-up below. `jank-zig build` then
+rebuilds Binaryen and refreshes its patch stamp; the measurement script checks
+that stamp. No container, runtime archive or global SDK reinstall is needed.
+
+The harness logs compiler/link commands and invokes main's checked-in
+`wasm-probe/spill-pointers.py` for the transform. It reuses Release archives
+(`CMAKE_BUILD_TYPE=Release`, release default `-O3 -DNDEBUG`; individual runtime
+commands can override with `-O2`). It recompiles the same generated launcher,
+`spike.core` and measurement driver using each runtime's context compile flags,
+without the native PCH, appending **`-O2 -g`** for both targets. Zig uses
+**`-O ReleaseSafe`** for both. Native links with `g++-14`, `-pthread -ldl`;
+its ELF is unstripped and uses system shared libraries, unlike the Wasm module.
+Sizes exclude the Emscripten JS companion; gzip is Python gzip level 9, mtime 0.
+
+Wasm links with main's **`-O2 -g --profiling-funcs -sMEMORY64=1
+-fwasm-exceptions -sALLOW_MEMORY_GROWTH=1 -sEXIT_RUNTIME=1
+-sSTACK_SIZE=4194304 -Wl,--error-limit=0`**, plus the measurement-only
+`spill-cost-pre.js` hook and C++ timing driver. Both Wasm variants use that
+same **4-MiB stack**, including the unspilled control. Only spill receives
+**`--flatten --spill-pointers -g`** through main's helper and its identical
+feature flags; there is no additional pre/post-transform optimization.
+Emscripten's own `-O2` link optimization remains enabled for both variants.
+Names are retained because Binaryen needs the stack-pointer name. Debug data
+is retained exactly as in main; Binaryen warns flatten is not fully compatible
+with DWARF, so transformed source locations are not trusted. Stripped companion
+files are generated only for size accounting, not substituted for timed files.
+
+`process.uptime()` in Emscripten `preRun` measures Node initialization, JS
+loading, Wasm compilation/instantiation and runtime setup, **before main or
+jank initialization**. It excludes Docker invocation overhead and does not
+measure jank/core loading; the driver's separate `FIRST_ENTRY` timer does.
+This is a fresh-process measurement with warm OS
+file caches, not a cold-disk or browser measurement.
+
+The C++ driver first invokes the real generated launcher, then uses
+`jank_call0(jank_deref(jank_var_intern_c("spike.core", "-main")))` for
+1,000 warm-up calls and 10,000 timed calls. Timing uses `steady_clock` inside
+the process and excludes first-entry/core loading. Both targets still execute
+the spike's marker formatting and output machinery, redirected to `/dev/null`
+during warm-up/timing; this is **not** an arithmetic-only microbenchmark.
+Correctness is checked separately by requiring both expected markers from
+the initial and final untimed call, clean process exit, a timing record and
+the expected final GC state in every sample. Timed-call output is suppressed,
+not individually validated. Static roots are registered in **both** Wasm
+variants; the unspilled control disables GC before jank initialization and
+never collects at safepoints. It is a diagnostic baseline, not a GC-safe mode.
+The spill-enabled samples have GC enabled and the counter advances **15 → 16**
+over each 10,000-call timed loop, not every entry; the GC-disabled counters
+stay 1 → 1. Current main's bounded operand/EH checks are documented below;
+this benchmark adds no claim about general rooting or exception safety.
+Raw seven-sample timings, per-run logs, binaries and results stay under ignored
+`artifacts/spill-cost/`; the full native suite and browser were not rerun.
+
+### wasm64 first-entry follow-up: compact locals after spilling
+
+This AI-assisted follow-up supersedes the transform/timing description above,
+not its historical measurements. After merging `origin/main` at `654557e8d`,
+the shared `wasm-probe/spill-pointers.py` now runs:
+
+```text
+--flatten --spill-pointers --reorder-locals --coalesce-locals --reorder-locals -g
+```
+
+Both `jank-build` and the compatibility `jank-zig` entry point use that helper.
+No runtime, collector patch, spill-slot allocation/zeroing, stack size, or GC
+policy changed. Reordering first removes unused locals before the nonlinear
+coalescing pass; the final reorder removes unused indices and favors frequent
+accesses. This deliberately does not enable a general `-O2` post-spill pipeline.
+
+#### Diagnosis
+
+The dominant regression is **V8 lazy baseline compilation of functions with
+enormous flattened local sets**, rather than collections during initialization:
+
+* A named `node --cpu-prof` run charged about **2.912 s** of samples to
+  `jank::runtime::obj::jit_function::call() const`, and another **0.211 s** to
+  the generated launcher callback. Those caller samples alone do not distinguish
+  lazy compilation from execution. A separate `--trace-wasm-compilation-times`
+  run does: Liftoff compilation of `jank_load_clojure_core_0` took
+  **2,900,163 µs**, with 5,396,666,144 bytes of reported compiler allocation;
+  `jank_load_clojure_core` took **187,628 µs**. The loader functions are actually
+  compiled on first entry, not merely present in the binary. Compilation work
+  sums are not an exact subtraction from wall time (tiers can overlap).
+* After compaction, a diagnostic trace measured the corresponding compilations
+  at **27,563 µs** and **46,172 µs**. The table below shows the same functions'
+  encoded code bodies and declared non-parameter locals; these are binary
+  section measurements, not estimates from WAT text.
+
+| Function | Unspilled bytes / locals | Flatten+spill bytes / locals | Compacted bytes / locals |
+| --- | ---: | ---: | ---: |
+| `jank_load_clojure_core_0` | 175,622 / 12 | 914,093 / 46,243 | 507,172 / 13 |
+| `jank_load_clojure_core` | 56,850 / 40 | 731,545 / 14,488 | 589,478 / 43 |
+
+* The final matched GC-disabled measurements still show **3,441.739 ms** before
+  compaction, with **zero collections and zero collection milliseconds**.
+  With GC enabled, both spill variants perform **14** init collections;
+  Boehm's `GC_start_performance_measurement` /
+  `GC_get_full_gc_total_time` report median full-collection time of **31 ms**
+  before and **32 ms** after. This timer has millisecond resolution and is not
+  a timer for all allocation work. Collections cannot explain the seconds-long
+  difference that also occurs with collection disabled.
+* Single-process flag probes on the original named module measured first entry
+  at **3,344 ms** by default, **3,436 ms** with `--liftoff-only`, **3,332 ms**
+  with `--wasm-dynamic-tiering`, and **3,337 ms** with
+  `--no-wasm-dynamic-tiering`. `--no-liftoff` aborted with
+  `FATAL ERROR: Zone Allocation failed - process out of memory`.
+  A bounded `--no-wasm-lazy-compilation` attempt produced no timing or success
+  markers despite exit 0; it is an unusable sample, not a speedup. Changing
+  engine flags is not the implemented fix.
+* A separately relinked **16-MiB** stack control still took **3,315 ms** with
+  the original transform and GC disabled. The measured/fixed path retains
+  main's **4-MiB** stack. Increasing the stack does not remove the regression.
+* The full final module retains exactly **815,307 Store**, **8,366 MemoryFill**,
+  **51,419 GlobalSet**, **107,915 Call**, **9,131 CallIndirect**, **30,903 Try**,
+  and **21,362 Rethrow** operations after compaction. Total locals fall from
+  **1,210,551 to 56,032**. Unchanged zeroing operations plus the compilation
+  traces argue against spill-slot zeroing as the dominant cost. Zeroing time
+  was not separately instrumented; the remaining ~0.28 s is not fully split
+  into engine, allocation, and jank execution costs.
+
+`ReorderLocals.cpp` only remaps local indices/removes unused locals.
+`CoalesceLocals.cpp::applyIndices` rewrites local accesses/copies and replaces
+dead local sets with their values (or drops), preserving evaluation of those
+values. Its “dead stores” comment concerns **local.set**, not memory stores.
+No pass here deletes the memory spill stores, moves them past calls, or changes
+the reserved shadow-stack frame. Counts alone are not a proof of rooting:
+the focused callback/unwind fixture and real-runtime matrix below additionally
+exercise the resulting roots. This remains bounded evidence for this pinned
+Binaryen and runtime, not a proof for arbitrary optimizations or pointer carriers.
+
+#### Matched before/after measurement
+
+Seven fresh processes per row, medians; same release archives and app
+`-O2 -g`, Zig **0.17.1 / ReleaseSafe**, Emscripten **7.0.0**, Node **26.13.1**,
+private Binaryen **a9141c8cc**, and 4-MiB stack. The harness uses the freshly
+generated `artifacts/app/spike/stage-{native,wasm}` sources from current
+`jank-build`, not the retired `artifacts/app/source` cache. Only the post-spill
+local passes differ between the two spill binaries. “Startup” ends before
+jank; “first entry” includes jank/core initialization and the initial spike
+call; warm calls retain the prior 1,000 warm-up / 10,000 timed-call method.
+
+| Variant | Raw bytes | gzip bytes | Pre-jank startup ms | First entry ms | Warm µs/call |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Native, GC enabled | 9,208,832 | 2,647,646 | N/A | 65.744 | 1.769 |
+| wasm64 unspilled, GC disabled | 10,497,184 | 2,030,209 | 45.016 | 150.094 | 4.003 |
+| Before: flatten+spill, GC disabled | 25,454,130 | 5,874,498 | 64.183 | 3,441.739 | 7.757 |
+| After: compacted spill, GC disabled | 18,572,180 | 2,604,743 | 53.680 | 285.001 | 6.974 |
+| Before: flatten+spill, GC enabled | 25,454,130 | 5,874,498 | 70.771 | 3,470.479 | 8.540 |
+| After: compacted spill, GC enabled | 18,572,180 | 2,604,743 | 52.461 | 280.719 | 6.872 |
+
+First entry improves **12.1× / 91.7%** with GC disabled and **12.4× / 91.9%**
+with GC enabled. Raw size falls **27.0%**, gzip **55.7%**. Stripped size-only
+companions are **4,448,076 / 17,085,555 / 12,663,367 bytes** for unspilled /
+before / after. Warm-call changes are much smaller and noisier than the
+first-entry improvement; raw samples remain in `artifacts/spill-cost/results.json`.
+All six rows require both marker lines before and after timing, clean exit,
+and the expected GC state; unspilled/GC-disabled remains a diagnostic control.
+
+**Tradeoff:** local coalescing is expensive at build time: one application
+transform took **214 s** in this container. That one-time cost is excluded from
+runtime startup measurements. Debug names remain, but DWARF locations are not
+trusted after flatten/coalesce (Binaryen warns about their incompatibility).
+This change does not close the separately documented thrown-payload root gap.
+
+Reproduce sequentially from this directory (do not rebuild/check concurrently
+with measurement, since `check` recreates the staged sources):
+
+```sh
+./jank-zig check
+./jank-zig run node
+docker exec --user 1000:1000 jank-host-build \
+  python3 scripts/measure-spill-cost.py --self-test
+docker exec --user 1000:1000 jank-host-build \
+  python3 scripts/measure-spill-cost.py --compare-startup \
+  > artifacts/logs/spill-startup-cost.log 2>&1
+docker exec --user 1000:1000 jank-host-build \
+  python3 wasm-probe/spill-compaction-test.py
+docker exec --user 1000:1000 jank-host-build \
+  bash scripts/build-wasm64-target.sh gc-roots
+docker exec --user 1000:1000 jank-host-build \
+  bash scripts/build-wasm64-target.sh startup-spill
+python3 wasm-probe/spill-function-sizes.py artifacts/spill-cost/plain.wasm \
+  artifacts/spill-cost/spill-before.wasm artifacts/spill-cost/spill.wasm
+docker exec --user 1000:1000 jank-host-build \
+  .tools/node-v26.13.1-linux-x64/bin/node --cpu-prof \
+  --cpu-prof-dir=artifacts/spill-cost artifacts/spill-cost/spill-before.js no-gc
+# Substitute --trace-wasm-compilation-times or the engine flags above for --cpu-prof.
+```
+
+If the reused host compiler rejects `--reader-feature`, refresh it with the
+documented `docker exec --user 1000:1000 jank-host-build bash
+scripts/build-host-linux.sh host` first. No host SDK/system installation is needed.
+
+Validation output (all checked by markers, not exit status alone):
+
+```text
+SPILL COST VERDICT: PASS
+SPILL COST SELF-TEST: PASS (normal, empty, missing records, markers, GC state)
+SPILL UNWIND: iterations=10000 catch-stack-drift=0
+SPILL COMPACTION VERDICT: PASS (stores, zeroing, calls and unwind effects retained)
+spill-exception-roots locals: PASS (exit=0)
+spill-exception-roots nested: PASS (exit=0)
+spill-exception-roots temporary: PASS (exit=0)
+spill-exception-roots runtime-internal: PASS (exit=0)
+spill-exception-roots registered-global: PASS (exit=0)
+spill-exception-roots unregistered-global: PASS (exit=0)
+spill-exception-roots reclaim-control: PASS (exit=0)
+spill-exception-roots operand: PASS (exit=0)
+spill-exception-roots exception-local: PASS (exit=0)
+spill-exception-roots exception-payload: PASS (exit=0)
+spill-exception-roots exception-stack: PASS (exit=0)
+STARTUP SPILL VERDICT: PASS
+TARGET   VERDICT
+native   PASS
+node     PASS
+browser  PASS
+```
+
+The plain spill variant passes the original seven lifetime cases, operand,
+exception-local, and exception-stack; exception-payload still fails without
+the existing explicit exception-storage-root control, just as natively.
+Default/static-only/shadow/Asyncify controls retain their documented failures;
+the matrix's registered-exception native and Wasm success gates passed.
+`run node` prints both markers for all **20** entries, GC enabled. The automated
+headless browser marker check also passed; there was no interactive visual
+check or full native test-suite rerun. Diagnostic logs/profiles and metrics
+remain ignored under `artifacts/spill-startup-diagnosis` and `artifacts/logs`.
+
 ### wasm64 spill follow-up: operand stacks and exception paths
 
 This section records the historical PR #14 checkpoint. Its harness exception
@@ -1670,8 +2000,8 @@ runtime implementation and replacement matrix are documented below under
 
 This is a collector-only extension of PR #12, using the same real runtime
 archives and Ubuntu container. No runtime source or SDK installation changed.
-The final pipeline is **`--flatten --spill-pointers`**, with no subsequent
-optimization. The private patch now also restores spill reservations on
+The pipeline for that measurement was **`--flatten --spill-pointers`**, with no
+subsequent optimization. The private patch also restores spill reservations on
 exceptional exit and clears fresh spill slots when bulk memory is available.
 The checked-in patch applies to clean Binaryen `a9141c8cc` and was compared
 byte-for-byte with the locally built `src/abi/stack.h`.
@@ -1968,10 +2298,11 @@ base catches by value and const reference still match. `oref<object>` and
 `jtl::make_ref<error::base>` uses `new(UseGC)`.
 
 Each holder owns one scanned `GC_MALLOC_UNCOLLECTABLE(sizeof(void *))` cell.
-The object cell stores the **raw tagged word**, and the error cell stores the
-GC-managed error pointer. bdwgc's `gc.h` explicitly documents that uncollectable
+The object cell stores the **raw tagged word** on 64-bit targets (the raw object
+pointer on 32-bit targets), and the error cell stores the GC-managed error
+pointer. bdwgc's `gc.h` explicitly documents that uncollectable
 allocations are scanned even when otherwise unreachable. Both the runtime
-build and `cmake/dependency/bdwgc.cmake` set
+build and `cmake/dependency/bdwgc.cmake` set, on 64-bit targets,
 `POINTER_MASK=0x0000FFFFFFFFFFFF`; `gcconfig.h` applies that mask in
 `FIXUP_POINTER`. The native and wasm64 disappearing-link checks exercise this
 combination, rather than substituting an untagged object root.
@@ -2017,6 +2348,13 @@ fields, handwritten raw base-reference throws outside these routes, or values
 mutated through a base alias rather than the holder's assignment operators.
 
 ### Current matrix
+
+The merged build retains main's post-spill local compaction:
+`--flatten --spill-pointers --reorder-locals --coalesce-locals --reorder-locals`.
+The results below recheck the runtime-owned roots with that pipeline, not just
+the earlier un-compacted spill transform. The wasm32 representation, WASI
+changes, configurable startup entry and build-wrapper changes from main are
+retained; this rerun covers native Linux and wasm64/Node only.
 
 P/F are the matrix's PASS/FAIL result, requiring both the case marker and clean
 exit. L/N/T/R are locals/nested/temporary/runtime-internal, G+/G- registered and
@@ -2075,10 +2413,10 @@ docker exec --user 1000:1000 -e SAFEPOINT_ITERATIONS=20 jank-host-build \
 Native regression:
 
 ```text
-test: exit=0 elapsed=8s
+test: exit=0 elapsed=9s
 tested 870 jank files with 9 skips and 0 failures
-[doctest] test cases:  133 |  133 passed | 0 failed | 0 skipped
-[doctest] assertions: 2125 | 2125 passed | 0 failed |
+[doctest] test cases:  134 |  134 passed | 0 failed | 0 skipped
+[doctest] assertions: 2147 | 2147 passed | 0 failed |
 [doctest] Status: SUCCESS!
 ```
 
@@ -2097,13 +2435,13 @@ exception-rooting claim. The 4 MiB diagnostic stack remains confined to
 Final run output:
 
 ```text
-gc-roots: exit=0 elapsed=52s
+gc-roots: exit=0 elapsed=33s
 EXCEPTION payload: unwind-collections=8 retained-during-unwind=1 runtime-rooted=1
 CASE exception-payload: PASS collections=10 internal-collections=0
 CASE exception-rethrow: PASS collections=14 internal-collections=0
 CASE exception-ptr: PASS collections=14 internal-collections=0
 CASE exception-error: PASS collections=8 internal-collections=0
-EXCEPTION stack: iterations=10000 before=1551904 after=1551904 unwind-collections=60 recovery=1
+EXCEPTION stack: iterations=10000 before=1551936 after=1551936 unwind-collections=60 recovery=1
 STARTUP ITERATION 1/20: collections=15 used-bytes=16863232 heap-bytes=18784256 status=0
 STARTUP ITERATION 20/20: collections=15 used-bytes=16863232 heap-bytes=18784256 status=0
 STARTUP VERDICT: mode=continuous PASS iterations=20 passed=20 failed=0 exit=0
@@ -2116,20 +2454,94 @@ advance during the first transformed entry, not entries 2-20.
 
 | Matched diagnostic Wasm | Before transform | After transform | Increase |
 | --- | ---: | ---: | ---: |
-| gc-roots (14 cases) | 6,156,107 B | 9,143,582 B | 48.529% |
-| Spike | 10,506,073 B | 25,391,932 B | 141.688% |
+| gc-roots (14 cases) | 6,156,228 B | 7,304,579 B | 18.653% |
+| Spike | 10,506,219 B | 18,541,854 B | 76.485% |
 
 The latest matched successful GC-disabled 20-entry whole-process medians were
-0.181539 s before and 4.213125 s after the transform. As in the earlier sections,
+0.166508 s before and 0.351020 s after the compacted transform. As in the earlier sections,
 these include Node compilation/startup, were measured alongside the matrix, and
 are not an isolated exception or steady-state GC benchmark. Raw per-case output,
 commands, and startup markers are under ignored
 `artifacts/logs/wasm64-gc-roots-*` and `artifacts/logs/wasm64-startup-spill-*`;
 native output is in `artifacts/logs/host-test.log`.
 
+## wasm32 raw-reference runtime and GC-enabled Zig spike
+
+This AI-assisted follow-up preserves the 64-bit aliases and NaN encoding.
+On 32-bit targets, `uptr`, `usize` and `ssize` use the compiler's pointer/size/
+difference types; `JANK_NAN_BOXING` is false. An erased `object_ref` contains a
+raw pointer, never a truncated NaN tag. Erasing a small numeric ref allocates
+an ordinary `obj::integer` or `obj::real` through the existing GC allocator.
+The small typed numeric refs remain value adapters; no numeric bits are stored
+in a 32-bit pointer. The collector pointer mask is applied only on 64-bit builds.
+The C ABI and generated launcher size aliases also follow the target width.
+
+**Source inspection:** the shared tag/untag helpers cover `make_box`, numeric
+conversion, truthiness, visitation and math without duplicating those paths.
+Generated `_jank_small_int`/`_jank_small_real` literals use the same typed adapters
+and allocate when erased. The compiler's eval-only typed-pointer literal path
+also accepts raw pointers. Reader offset literals now have `usize` type; file
+mapping checks that its size fits before converting to `usize`.
+
+Reproduction uses the documented fresh `ubuntu:24.04` `jank-host-build`
+container, pinned LLVM 23.1.6, Emscripten 7.0.0, Zig 0.17.1 and Node 26.13.1.
+No global tools or submodule pins changed. From this directory, after the
+one-command wrapper's prerequisite bootstrap:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh host
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh spike
+for step in deps configure build spike; do
+  docker exec --user 1000:1000 -e WASM_BITS=32 jank-host-build \
+    bash scripts/build-wasm64-target.sh "$step"
+done
+# Ordinary spike startup above lacks roots and does not pass the marker gate.
+docker exec --user 1000:1000 -e WASM_BITS=32 \
+  -e SPILL_WASM_OPT="$PWD/.tools/gc-wasm/emsdk/upstream/bin/wasm-opt" \
+  jank-host-build bash scripts/build-wasm64-target.sh startup-spill
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh build
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh startup-spill
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+```
+
+**Compile/archive/link:** wasm32 dependencies/configuration succeeded, followed
+by the complete runtime/core archive and the generated launcher/module plus
+unchanged Zig object. The runtime smoke passes numeric equality/hash/conversion,
+nil and conversion-error checks, exception dispatch and capability errors.
+Native tests report **130/130 cases, 2053/2053 assertions, 0 failures**, including
+one new case with 22 assertions (the requested historical baseline was 129/2029;
+this checkout already had 129/2031). All 870 jank files have 9 skips, 0 failures.
+
+**Execution:** ordinary wasm32 startup still reports `The \`reader_opts\` argument
+must be a map, not a \`persistent_vector\`.` and fails the marker gate. With
+`__global_base..__data_end` registered, a 4 MiB diagnostic stack and
+`--flatten --spill-pointers`, both widths pass 20 continuous-GC entries:
+
+```text
+jank -> Zig: scalar and wide result checks passed
+jank -> Zig: borrowed-buffer checks passed
+STARTUP VERDICT: mode=continuous PASS iterations=20 passed=20 failed=0 exit=0
+STARTUP SPILL VERDICT: PASS
+```
+
+GC stays enabled (`gc-disabled=0`); collections advance 1→12 for wasm32 and
+1→15 for wasm64 during startup. Wasm32 uses **stock Binaryen 133
+`version_133-159-ga9141c8cc`**, not the private patch: its i32 stack arithmetic
+works for this spike. Wasm64 still uses the private memory64/EH-cleanup build.
+The patch's zeroing/EH changes also apply to i32 by inspection, but are not
+needed to reach these wasm32 markers; wasm32 exception-lifetime/reclamation
+coverage was not established. Logs are `artifacts/logs/wasm{32,64}-*`; binaries
+are under `artifacts/wasm{32,64}-spike`. The `jank-zig` wrapper still defaults
+to wasm64; width selection here is through the lower-level helper.
+
+**Correctness scope:** these finite numeric and spike assertions do not prove
+general GC rooting, browser portability or full Wasm support. Runtime-owned
+exception roots are covered separately above for native and wasm64; wasm32
+exception-lifetime/reclamation coverage was not established.
+
 ## WASI
 
-This AI-assisted Linux x86_64 experiment uses **Emscripten compiler + WASI ABI
+The original AI-assisted Linux x86_64 experiment uses **Emscripten compiler + WASI ABI
 shim + Wasmtime**, not native wasi-sdk WASI or general WASI support. The real
 jank-generated spike and unchanged `native.zig` implementation run with GC
 enabled. Ordinary unrooted startup remains broken. The tracked harness uses
@@ -2178,7 +2590,8 @@ and patched Binaryen **`a9141c8cc`** for spilling. Initial toolchain probes:
   / `UNREACHABLE ... abi/stack.h:64`, even with a named i64 `__stack_pointer`.
   The repository's private patch remains required.
 
-Representative wasi-sdk wasm32 jank compilation (nine real translation units):
+Historical wasi-sdk wasm32 jank compilation (nine real translation units,
+before the raw-reference work and the native WASI follow-up below):
 
 | Category | First observed blocker / diagnostic result |
 | --- | --- |
@@ -2189,6 +2602,116 @@ Representative wasi-sdk wasm32 jank compilation (nine real translation units):
 | cpptrace | `platform/platform.hpp:18: "Unexpected platform"`; current Emscripten runtime excludes it. |
 | Pinned bdwgc | Non-threaded `alloc.c` compiles; threaded probe hits WASI signal emulation and `No multi-threading support yet`. |
 | Isolated threads/atomics, filesystem, dlopen, setjmp, Boost multiprecision | Objects compile; not proof of linking, host capabilities, JIT availability, or a runtime port. |
+
+### Native wasm32-wasip1 runtime attempt (wasi-sdk 34)
+
+This separate AI-assisted attempt uses **wasi-sdk 34.0 targeting
+`wasm32-wasip1`**, not Emscripten, injected platform macros, or the wasm64 ABI
+shim. It stops at a real core-library compile blocker; there is **no native
+WASI jank/Zig execution result**. This supersedes the historical wasm32
+pointer-width/platform compile observations above, not the shim results.
+
+**Source inspection and bounded fixes:**
+
+- WASI is an explicit platform, with existing platform enum values preserved.
+  Executable-path discovery throws an explicit unsupported-capability error;
+  terminal size uses the existing 80x24 fallback because Preview 1 has no tty
+  size API. cpptrace is excluded as on Emscripten, while standard C++ exception
+  propagation remains in use. Native branches are unchanged.
+- CMake accepts WASI archive flags, leaves target standard include discovery
+  to the SDK, skips host LLVM's unsupported `HandleLLVMOptions` platform check,
+  and builds target zstd without the host `_GNU_SOURCE` assumption about
+  `qsort_r`. The cross-build phase-2 **dummy archive** no longer inherits the
+  host compiler's LLVM/isocline link dependencies on WASI. No nREPL/core module
+  or runtime implementation is removed.
+- A build-local Folly patch uses `pthread_self()` for the WASI thread ID and
+  the existing unavailable-context-switch-count fallback. The checked-in
+  submodule and its pin stay unchanged. Immer's atomics/spinlocks and the SDK's
+  C++ threading declarations compile without disabling their semantics.
+- BDWGC's existing WASI configuration compiles with `enable_threads=OFF` and
+  no pointer mask. No collector source patch is needed for this compile. Its
+  WASI static range is `__global_base..__heap_base`, with `STACKBOTTOM` at
+  `__global_base`; that is inspection, **not verified GC correctness**.
+  The module loader opts into the SDK's documented `_WASI_EMULATED_MMAN`
+  implementation and corresponding library, not a replacement loader stub.
+- A pre-existing pointer-format varargs mismatch exposed by the 32-bit build
+  is fixed by widening `uptr` to the `%llx` argument type. On 64-bit this is
+  the same `unsigned long long` type as before.
+
+**Reproduction:** use the documented Ubuntu 24.04 `jank-host-build` container
+with its LLVM 23.1.6/native build prerequisites and Boost 1.83 headers. From
+this directory:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh host
+for step in deps configure components eh capture; do
+  docker exec --user 1000:1000 jank-host-build bash scripts/build-wasi32-target.sh "$step"
+done
+# Expected exit 1 at the capture.jank diagnostic below:
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasi32-target.sh build
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+```
+
+The new script reuses `wasi-tools.sh` pins (SDK 34.0, Wasmtime 50.0.2,
+Binaryen 133). It checksum-verifies and builds target zlib 1.3.2; host Boost
+is used only as isolated portable headers. Host LLVM/zstd discovery metadata
+does not constitute a target link. SDKs/dependencies remain in `.tools/wasi`,
+objects in `artifacts/build-wasi32`, isolated binaries in
+`artifacts/wasi-probes`, and command/error logs in
+`artifacts/logs/wasi/wasi32-*.log`.
+
+**Compile:** C/C++ use `--target=wasm32-wasip1 -fwasm-exceptions` and the
+32-bit raw references. `components` succeeds for `jank_common_lib`,
+`jank_static_lib`, `jank_lib_phase_2`, Folly, BDWGC/gctba and zstd. Generated
+`clojure.core`, string/walk and the other nREPL translation units compile.
+The complete static-runtime target stops compiling generated nREPL capture:
+
+```text
+compiler+runtime/src/jank/jank/nrepl/server/capture.jank:11:11: error: use of undeclared identifier 'mkstemp'
+   11 | auto &&v6(mkstemp(v5));
+      |           ^~~~~~~
+1 error generated.
+ninja: build stopped: cannot make progress due to previous errors.
+EXIT=1
+```
+
+The location is a generated C++ `#line` mapping back to the original jank
+source. Adding `<cstdlib>` was tried and did not fix it: the SDK's
+`stdlib.h:118` deliberately guards `mkstemp` behind
+`__wasilibc_unmodified_upstream` ("WASI has no temp directories"). That macro
+was **not** defined to bypass the guard. More importantly, `with-capture`
+also needs `dup`/`dup2` to redirect actual C stdout/stderr. An independent
+SDK/Wasmtime control establishes the deeper capability boundary:
+
+```text
+WASI capture prerequisite: dup(1)=-1 errno=58 (ENOTSUP=58)
+WASI capture prerequisite: dup2(1,1)=-1 errno=58 (ENOTSUP=58)
+EXIT=0
+```
+
+This is not resolved by an include or a temporary-name generator. Preserving
+native descriptor-level output capture would require a WASI descriptor/I/O
+capture port or a deliberate capability design. The timeboxed attempt stops
+there rather than stubbing capture or dropping nREPL from the runtime archive.
+
+**Link:** the complete runtime archive and jank/Zig application link are not
+reached. Separately, the existing isolated C++ exception fixture links with
+`-fwasm-exceptions -lunwind`; stock Binaryen 133 `--translate-to-exnref` and
+Wasmtime `-W exceptions=y` produce `C++ exception caught: 42`, exit 0. Only
+the needed Wasm features are enabled, not `--all-features` (which allowed
+Binaryen to emit compact imports rejected by default Wasmtime).
+
+**Execution:** no jank startup, Zig markers, static-root registration or
+flatten/spill runtime execution was reached. The intended next executable
+stage would register `__global_base..__data_end`, flatten/spill i32 pointers,
+translate exceptions to exnref and run with GC enabled; it is **unverified**,
+not a claimed adaptation of the Emscripten success.
+
+**Correctness:** native `jank-test` after the runtime changes reports
+**130/130 cases, 2053/2053 assertions, 0 failures**, with 870 jank files,
+9 skips and 0 failures. The isolated EH and unsupported-descriptor controls
+do not establish WASI runtime/GC, threading, filesystem or exception-lifetime
+correctness. There is no general WASI-support claim.
 
 ### Reproduce the shim route
 
@@ -2319,6 +2842,26 @@ Default construction followed by `.resize()` expresses the desired allocation
 through supported jank interop without adding a C++ implementation.
 
 `build.zig` builds static and shared Zig libraries. `jank/src/spike/core.jank` is the Clojure caller. `scripts/` contains the reproduction commands. `wasm-probe/` contains isolated C++ callers, target-header probes and the collector test.
+
+## Shared ClojureScript / native / wasm64 benchmark
+
+The AI-assisted [bench-cljc report](examples/bench-cljc/REPORT.md) compares six
+identical `.cljc` kernels using official ClojureScript 1.12.145 (`:advanced`,
+Node 24), native jank, and the experimental wasm64 spill build. Run from the
+repository root:
+
+```sh
+python3 -B experiments/zig-wasm/examples/bench-cljc/measure.py
+```
+
+The driver bootstraps through jank-build and writes JSON (including ten samples
+per kernel), Markdown tables and logs under ignored `artifacts/bench-cljc/`.
+All three primary targets pass their checksums in the recorded run. The
+explicitly unsafe no-spill variant, with GC disabled, runs out of memory despite
+exit 0; the driver records the failure and exits 1. The report separates build,
+execution, correctness, startup and warm timings, and discusses ratios, the
+4 MiB Wasm stack and private spill-transform limitations. These finite results
+do not establish general Wasm support.
 
 ## Repository policy
 

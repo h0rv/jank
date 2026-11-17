@@ -1,8 +1,8 @@
 ;; AI-assisted page bridge: Module.liveInput in, Module.onLiveLine and onLiveFinish out.
 (ns live.page)
 
-#?(:wasm
-   (cpp/raw "#include <string>
+(cpp/raw "#include <string>
+#include <cstdio>
 #ifdef __EMSCRIPTEN__
 #include <emscripten.h>
 EM_JS(int, live_input_size, (), {
@@ -22,8 +22,8 @@ EM_JS(void, live_finish, (char const *text), {
 #else
 inline int live_input_size() { return -1; }
 inline void live_input_copy(char *, int) {}
-inline void live_show(char const *) {}
-inline void live_finish(char const *) {}
+inline void live_show(char const *text) { std::puts(text); }
+inline void live_finish(char const *text) { std::puts(text); }
 #endif
 inline jank::runtime::object_ref live_take_input()
 {
@@ -34,19 +34,10 @@ inline jank::runtime::object_ref live_take_input()
   text.resize(size);
   return jank::runtime::make_box<jank::runtime::obj::persistent_string>(
     jtl::immutable_string{ text.data(), text.size() });
-}"))
+}")
 
-#?(:wasm
-   (defn take-input [] (cpp/live_take_input))
-   :native
-   (defn take-input [] nil))
+(defn take-input [] (cpp/live_take_input))
 
-#?(:wasm
-   (defn show [text] (cpp/live_show (cpp/.c_str (cpp/jank.runtime.to_string text))))
-   :native
-   (defn show [text] (println text)))
+(defn show [text] (cpp/live_show (cpp/.c_str (cpp/jank.runtime.to_string text))))
 
-#?(:wasm
-   (defn finish [text] (cpp/live_finish (cpp/.c_str (cpp/jank.runtime.to_string text))))
-   :native
-   (defn finish [text] (println text)))
+(defn finish [text] (cpp/live_finish (cpp/.c_str (cpp/jank.runtime.to_string text))))

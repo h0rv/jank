@@ -2,6 +2,16 @@
   (:require [tetris.core :as core])
   (:include "raylib.h" "raygui.h" "rlgl.h"))
 
+;; AI-assisted compile-time bridge; browser frames are driven by RAF.
+(cpp/raw "inline bool tetris_native_loop() {
+#ifdef __EMSCRIPTEN__
+  return false;
+#else
+  SetTargetFPS(60);
+  return true;
+#endif
+}")
+
 (def themes
   {:default
    {:background 0x202020ff
@@ -410,12 +420,12 @@
 (defn -main [& args]
   (let [{{{:keys [screen-width screen-height]} :resolution} :settings} @state-atom]
     (cpp/InitWindow screen-width screen-height "tetris")
-    #?(:native (cpp/SetTargetFPS 60))
-    (cpp/SetExitKey cpp/KEY_NULL)
-    (println "tetris: initialized")
-    #?(:native (do
-                 (while (cpp/! (cpp/WindowShouldClose)) (frame))
-                 (cpp/CloseWindow)))))
+    (let [native-loop? (cpp/tetris_native_loop)]
+      (cpp/SetExitKey cpp/KEY_NULL)
+      (println "tetris: initialized")
+      (when native-loop?
+        (while (cpp/! (cpp/WindowShouldClose)) (frame))
+        (cpp/CloseWindow)))))
 
 (comment
   (def fut (future (-main)))

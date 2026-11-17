@@ -172,6 +172,7 @@ subprocess.run([str(root / '.tools/zig-x86_64-linux-0.17.1/zig'), 'build-obj',
                 '--global-cache-dir', str(root / '.zig-cache/global')], check=True)
 subprocess.run([flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1', '-fwasm-exceptions',
                 '-sALLOW_MEMORY_GROWTH=1',
+                *(['-sSTACK_SIZE=4194304'] if variant == 'startup-spill' else []),
                 *objects, str(out / (variant + '-zig.o')),
                 str(build / 'libjank-static-runtime.a'), '-Wl,--error-limit=0',
                 '-o', str(out / (variant + '.js'))], check=True)

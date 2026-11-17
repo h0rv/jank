@@ -271,6 +271,7 @@
     clojure.string-test.split-lines
     clojure.string-test.starts-with-qmark
     clojure.string-test.upper-case
+    jank-test.string-join
   ])
 
 (def windows? (= cpp/jtl.current_platform cpp/jtl.platform.windows_like))

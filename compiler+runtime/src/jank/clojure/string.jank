@@ -128,16 +128,9 @@
   "Returns a string of all elements in coll, as returned by (seq coll),
   separated by an optional separator."
   ([coll]
-   (apply str coll))
+   (cpp/clojure.string_native.join "" coll))
   ([separator coll]
-   (loop [s (str (first coll))
-          more (next coll)
-          sep (str separator)]
-     (if more
-       (recur (str s sep (first more))
-              (next more)
-              sep)
-       s))))
+   (cpp/clojure.string_native.join (str separator) coll)))
 
 (defn upper-case
   "Converts string to all upper-case."

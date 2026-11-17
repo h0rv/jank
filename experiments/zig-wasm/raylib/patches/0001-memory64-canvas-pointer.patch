@@ -1,0 +1,14 @@
+AI-assisted memory64 adaptation of raylib 6.0's web canvas initialization.
+The original zlib license and source notices remain unchanged.
+JS typed-array/string helpers use Number offsets; EM_JS pointer arguments are
+BigInt under memory64. Number also preserves the existing wasm32 behavior.
+
+--- a/src/platforms/rcore_web.c
++++ b/src/platforms/rcore_web.c
+@@ -149,5 +149,5 @@
+ // JS: Set the canvas id provided by the module configuration
+ EM_JS(void, SetCanvasIdJs, (char *out, int outSize), {
+     var canvasId = "#" + Module.canvas.id;
+-    stringToUTF8(canvasId, out, outSize);
++    stringToUTF8(canvasId, Number(out), outSize);
+ });

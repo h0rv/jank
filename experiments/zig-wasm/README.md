@@ -121,6 +121,50 @@ requires native, Node and headless Chrome success and
 prints a verdict table. Logs and browser DOM evidence are in
 `artifacts/logs/app/`. `serve --port N` selects another port.
 
+### C libraries and interactive browser frames
+
+Small optional `jank-build.json` additions:
+
+```json
+{"main": "tetris.main", "expect": ["tetris: initialized"],
+ "libraries": ["raylib"], "include_dirs": [],
+ "native": {"link_flags": []}, "wasm": {"link_flags": []},
+ "frame": "tetris.main/frame"}
+```
+
+`libraries` currently accepts only `raylib`, once. Its cached recipe runs
+`scripts/build-raylib.sh native|wasm64` and supplies raylib 6.0 / raygui 5.0
+headers and static archives. Includes reach host jank analysis and generated
+C++ compilation. Native linkage adds GL, m, pthread, dl, rt and X11; Wasm
+adds GLFW3 and WebGL2, matching the recipe's GLES3 build. See
+[`raylib/README.md`](raylib/README.md) for source pins, licenses and the bounded
+memory64 patch. No Maven/Lein dependency resolution is implied.
+
+`include_dirs` accepts existing project-relative or absolute directories (the
+container must see the same paths). Per-target `link_flags` are literal
+compiler argument arrays appended at final linkage; no shell expansion occurs.
+These escape hatches do not build or discover arbitrary libraries. Declarations
+needed during host macro evaluation may also require host-loadable libraries;
+target-only archives cannot be executed by the host compiler.
+
+`frame` is an optional qualified zero-argument var, loaded by `main`'s dependency
+graph. Natively it changes nothing: the app owns its loop. On Wasm, `-main`
+must initialize and return. A separate driver registers static roots, disables
+GC during initialization and each `jank_call0` frame, and enters
+`emscripten_set_main_loop(callback, 0, 0)` with `EXIT_RUNTIME=0`, no Asyncify.
+Collection happens only after jank returns, at an empty-stack safepoint,
+initially and every frame. `Module.jankCollectEvery` (integer 1–60) permits
+cadence comparisons; `Module.jankFrameStats` exposes frames, collections,
+GC heap/used bytes and linear memory bytes for bounded measurements.
+This remains an experimental rooting strategy, not general Wasm GC support.
+
+The page provides a focusable canvas, initially 1280×800; `InitWindow` sets the
+actual application size. Click the canvas to refocus keyboard input. Main
+returning is not a completion verdict. Interactive apps use `build` + `serve`
+and app-specific checks, not the terminating native/Node/browser `check`.
+The fork-only [`examples/tetris`](examples/tetris) is **not licensed for
+redistribution or publication**; do not deploy it as a public page.
+
 Docker, Python 3, curl, tar, Git and (for browser commands) `google-chrome`
 must already be available on the host. The wrapper creates/starts the
 `jank-host-build` Ubuntu 24.04 container, installs its documented pinned LLVM

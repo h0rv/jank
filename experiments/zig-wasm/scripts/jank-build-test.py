@@ -97,6 +97,77 @@ class ProjectTests(unittest.TestCase):
         self.assertIsNone(project.zig)
         self.assertEqual(project.expected('browser'), ('done',))
         self.assertEqual(project.wasm_check, 'single')
+        self.assertEqual(project.libraries, ())
+        self.assertEqual(project.include_dirs, ())
+        self.assertIsNone(project.frame)
+
+    def test_c_library_options(self):
+        self.config.update(libraries=['raylib'], include_dirs=['src'],
+                           native={'link_flags': ['-lm']}, wasm={'link_flags': ['-sASSERTIONS=1']},
+                           frame='hello.core/frame')
+        project = self.load()
+        native = driver.c_dependencies(project, 'native')
+        wasm = driver.c_dependencies(project, 'wasm')
+        self.assertIn(self.root / 'src', native.include_dirs)
+        self.assertTrue(str(native.archives[0]).endswith('native/lib/libraygui.a'))
+        self.assertTrue(str(wasm.archives[1]).endswith('wasm64/lib/libraylib.a'))
+        self.assertIn('-sUSE_GLFW=3', wasm.link_flags)
+        self.assertIn('-sASSERTIONS=1', wasm.link_flags)
+        self.assertIn('-lGL', native.link_flags)
+        self.assertEqual(project.frame, 'hello.core/frame')
+
+    def test_empty_c_dependencies(self):
+        self.config.update(libraries=[], include_dirs=[], native={'link_flags': []}, wasm={})
+        for platform in ('native', 'wasm'):
+            self.assertEqual(driver.c_dependencies(self.load(), platform), driver.CDependencies())
+
+    def test_invalid_c_options_and_frame(self):
+        for key, value in [('libraries', ['unknown']), ('libraries', ['raylib', 'raylib']),
+                           ('libraries', 'raylib'), ('include_dirs', ['missing']),
+                           ('include_dirs', [3]), ('native', []),
+                           ('wasm', {'link_flags': [3]}), ('frame', 'not-qualified'),
+                           ('frame', None), ('frame', 'ns/fn\"'), ('frame', 3)]:
+            with self.subTest(key=key, value=value):
+                self.config[key] = value
+                with self.assertRaises(RuntimeError):
+                    self.load()
+                del self.config[key]
+
+    def test_frame_excludes_diagnostic_mode(self):
+        self.config.update(frame='hello.core/frame', wasm_check='spike-continuous')
+        with self.assertRaisesRegex(RuntimeError, 'cannot be combined'):
+            self.load()
+
+    def test_wasm_driver_and_link_options(self):
+        template = (driver.ROOT / 'scripts/app-index.html').read_text()
+        (self.root / 'scripts').mkdir()
+        (self.root / 'scripts/app-index.html').write_text(template)
+        target = self.root / 'artifacts/build-wasm64'
+        target.mkdir(parents=True)
+        (target / 'compile_commands.json').write_text('[]')
+        for frame in (None, 'hello.core/frame'):
+            with self.subTest(frame=frame):
+                if frame:
+                    self.config['frame'] = frame
+                self.config.update(libraries=['raylib'], wasm={'link_flags': ['-sASSERTIONS=1']})
+                project = self.load()
+                calls = []
+                def run(label, args, **kwargs):
+                    calls.append((label, args))
+                    if label == 'link':
+                        (project.out / 'wasm' / f'{project.name}.js').write_text('')
+                with mock.patch.object(driver, 'ROOT', self.root), \
+                        mock.patch.object(driver, 'OUT', self.root / 'artifacts/app'), \
+                        mock.patch.object(driver, 'wasm_compile_flags', return_value=(['em++'], self.root)):
+                    driver.build_wasm(project, self.root, [], self.root / 'main.cpp', run)
+                    page = (project.out / 'wasm/index.html').read_text()
+                link = next(args for label, args in calls if label == 'link')
+                self.assertIn(f'-sEXIT_RUNTIME={0 if frame else 1}', link)
+                self.assertIn('-sUSE_GLFW=3', link)
+                self.assertIn('-sASSERTIONS=1', link)
+                cpp = [args for label, args in calls if label.startswith('cpp')][-1]
+                self.assertTrue(any(str(arg).endswith('frame-driver.cpp' if frame else 'startup-driver.cpp') for arg in cpp))
+                self.assertIn('"frame": ' + ('"hello.core/frame"' if frame else 'null'), page)
 
     def test_per_target_expect(self):
         self.config['expect'] = {target: [target] for target in ('native', 'node', 'browser')}

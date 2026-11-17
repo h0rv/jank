@@ -9,6 +9,18 @@ ZLIB="$ROOT/.tools/wasi/build-zlib"
 HEADERS="$ROOT/.tools/wasi/headers"
 TOOLCHAIN="$S/share/cmake/wasi-sdk-p1.cmake"
 SPIKE="$ROOT/artifacts/wasi32-spike"
+LOG_PREFIX=wasi32
+target_flags='-fwasm-exceptions -D_WASI_EMULATED_MMAN'
+runtime_link_flags=()
+legacy_compile_flags=()
+if [[ "${WASI_LEGACY_EH:-0}" == 1 ]]; then
+  BUILD+=-legacy
+  SPIKE+=-legacy
+  LOG_PREFIX+=-legacy
+  target_flags+=' -mllvm -wasm-use-legacy-eh=true'
+  legacy_compile_flags=(-mllvm -wasm-use-legacy-eh=true)
+  runtime_link_flags=(-L"$ROOT/.tools/wasi/legacy-runtimes/lib/wasm32-wasip1/eh")
+fi
 wasi32_features=(--enable-exception-handling --enable-bulk-memory
   --enable-mutable-globals --enable-nontrapping-float-to-int --enable-sign-ext
   --enable-reference-types --enable-multivalue)
@@ -18,8 +30,8 @@ mkdir -p "$L" "$TMPDIR"
 run() {
   local name=$1 rc=0; shift
   { printf '$ '; printf '%q ' "$@"; printf '\n'; "$@" || rc=$?; printf 'EXIT=%s\n' "$rc"; } \
-    > "$L/wasi32-$name.log" 2>&1
-  tail -n 20 "$L/wasi32-$name.log"
+    > "$L/$LOG_PREFIX-$name.log" 2>&1
+  tail -n 20 "$L/$LOG_PREFIX-$name.log"
   return "$rc"
 }
 generate_spike() {
@@ -80,8 +92,8 @@ case "${1:-configure}" in
     run configure cmake -S "$SOURCE" -B "$BUILD" -GNinja \
       "-DCMAKE_TOOLCHAIN_FILE=$TOOLCHAIN" -DCMAKE_BUILD_TYPE=Release \
       -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
-      "-DCMAKE_C_FLAGS=-fwasm-exceptions -D_WASI_EMULATED_MMAN" \
-      "-DCMAKE_CXX_FLAGS=-fwasm-exceptions -D_WASI_EMULATED_MMAN" \
+      "-DCMAKE_C_FLAGS=$target_flags" \
+      "-DCMAKE_CXX_FLAGS=$target_flags" \
       "-DCMAKE_EXE_LINKER_FLAGS=-lunwind -lwasi-emulated-mman" \
       -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH -DCMAKE_FIND_PACKAGE_PREFER_CONFIG=ON \
       -Dllvm_dir=/usr/lib/llvm-23 -Dclang_dir=/usr/lib/llvm-23 \
@@ -110,24 +122,53 @@ case "${1:-configure}" in
     run components cmake --build "$BUILD" -j "${JOBS:-6}" \
       --target jank_common_lib jank_static_lib jank_lib_phase_2 folly_lib gc gctba libzstd_static
     ;;
+  diagnostic)
+    echo 'DIAGNOSTIC ONLY: unspilled mixed-EH module, not the GC/spill result'
+    run diagnostic-exnref "$B/wasm-opt" "$SPIKE/spike-unspilled.wasm" "${wasi32_features[@]}" \
+      --translate-to-exnref -g -o "$SPIKE/diagnostic-unspilled.wasm"
+    status=0
+    run diagnostic-gc-on timeout 120 "$W" run -W exceptions=y \
+      "$SPIKE/diagnostic-unspilled.wasm" static-roots || status=$?
+    run diagnostic-gc-off timeout 120 "$W" run -W exceptions=y \
+      "$SPIKE/diagnostic-unspilled.wasm" no-gc || status=$?
+    echo "DIAGNOSTIC ONLY: completed (last nonzero exit=$status)"
+    ;;
   spike)
+    if [[ "${WASI_LEGACY_EH:-0}" == 1 ]]; then
+      for library in libc++.a libc++abi.a libunwind.a; do
+        test -f "$ROOT/.tools/wasi/legacy-runtimes/lib/wasm32-wasip1/eh/$library"
+      done
+    fi
     run spike-generate generate_spike
-    run spike-compile python3 "$ROOT/scripts/wasi32-spike-compile.py" "$ROOT"
+    run spike-compile python3 "$ROOT/scripts/wasi32-spike-compile.py" "$ROOT" "$BUILD" "$SPIKE"
     run spike-link "$S/bin/clang++" --target=wasm32-wasip1 -O2 -g -fwasm-exceptions \
       -Wl,--stack-first -Wl,-z,stack-size=4194304 \
       -Wl,--export=__global_base -Wl,--export=__data_end -Wl,--export=__stack_pointer \
       "$SPIKE/main.o" "$SPIKE/core.o" "$SPIKE/driver.o" "$SPIKE/zig.o" \
-      "$BUILD/libjank-static-runtime.a" "$ZLIB/libz.a" -lunwind -lwasi-emulated-mman \
+      "$BUILD/libjank-static-runtime.a" "$ZLIB/libz.a" "${runtime_link_flags[@]}" -lunwind -lwasi-emulated-mman \
       -Wl,--error-limit=0 -o "$SPIKE/spike-unspilled.wasm"
+    if [[ "${WASI_LEGACY_EH:-0}" == 1 ]]; then
+      run spike-eh-disassemble "$B/wasm-dis" "$SPIKE/spike-unspilled.wasm" \
+        -o "$SPIKE/spike-unspilled.wat"
+      run spike-eh-inspect python3 - "$SPIKE/spike-unspilled.wat" <<'PY'
+import pathlib, re, sys
+text = pathlib.Path(sys.argv[1]).read_text()
+legacy = len(re.findall(r'^\s*\(try(?:\s|$)', text, re.M))
+tables = len(re.findall(r'^\s*\(try_table(?:\s|$)', text, re.M))
+print(f'WASI legacy EH inspection: try={legacy} try_table={tables}')
+assert legacy > 0 and tables == 0, 'legacy-only EH required before flatten'
+PY
+    fi
     run spike-spill "$B/wasm-opt" "$SPIKE/spike-unspilled.wasm" "${wasi32_features[@]}" \
-      --flatten --spill-pointers -g -o "$SPIKE/spike-spilled.wasm"
+      --flatten --spill-pointers --reorder-locals --coalesce-locals --reorder-locals \
+      -g -o "$SPIKE/spike-spilled.wasm"
     run spike-exnref "$B/wasm-opt" "$SPIKE/spike-spilled.wasm" "${wasi32_features[@]}" \
       --translate-to-exnref -g -o "$SPIKE/spike.wasm"
     run spike-run "$W" run -W exceptions=y "$SPIKE/spike.wasm" continuous 20
-    grep -Fxq 'jank -> Zig: scalar and wide result checks passed' "$L/wasi32-spike-run.log"
-    grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' "$L/wasi32-spike-run.log"
+    grep -Fxq 'jank -> Zig: scalar and wide result checks passed' "$L/$LOG_PREFIX-spike-run.log"
+    grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' "$L/$LOG_PREFIX-spike-run.log"
     python3 "$ROOT/wasm-probe/startup-safepoints-check.py" \
-      "$L/wasi32-spike-run.log" continuous 20 0
+      "$L/$LOG_PREFIX-spike-run.log" continuous 20 0
     ;;
   capture)
     wasi_tools
@@ -139,12 +180,13 @@ case "${1:-configure}" in
   eh)
     wasi_tools
     run eh-link "$S/bin/clang++" --target=wasm32-wasip1 -O2 -fwasm-exceptions \
-      "$SOURCES/hello.cpp" -lunwind -o "$P/wasi32-eh.wasm"
-    run eh-exnref "$B/wasm-opt" "$P/wasi32-eh.wasm" "${wasi32_features[@]}" \
-      --translate-to-exnref -o "$P/wasi32-eh-exnref.wasm"
-    run eh-run "$W" run -W exceptions=y "$P/wasi32-eh-exnref.wasm"
-    grep -Fxq 'C++ exception caught: 42' "$L/wasi32-eh-run.log"
+      "${legacy_compile_flags[@]}" "$SOURCES/hello.cpp" "${runtime_link_flags[@]}" \
+      -lunwind -o "$P/$LOG_PREFIX-eh.wasm"
+    run eh-exnref "$B/wasm-opt" "$P/$LOG_PREFIX-eh.wasm" "${wasi32_features[@]}" \
+      --translate-to-exnref -o "$P/$LOG_PREFIX-eh-exnref.wasm"
+    run eh-run "$W" run -W exceptions=y "$P/$LOG_PREFIX-eh-exnref.wasm"
+    grep -Fxq 'C++ exception caught: 42' "$L/$LOG_PREFIX-eh-run.log"
     echo 'WASI32 EH VERDICT: PASS (isolated probe, not the jank runtime)'
     ;;
-  *) echo "Usage: $0 {tools|deps|configure|build|verify|components|spike|spill-probe|capture|eh}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {tools|deps|configure|build|verify|components|spike|diagnostic|spill-probe|capture|eh}" >&2; exit 2 ;;
 esac

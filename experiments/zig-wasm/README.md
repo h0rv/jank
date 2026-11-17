@@ -2411,7 +2411,128 @@ before the raw-reference work and the native WASI follow-up below):
 | Pinned bdwgc | Non-threaded `alloc.c` compiles; threaded probe hits WASI signal emulation and `No multi-threading support yet`. |
 | Isolated threads/atomics, filesystem, dlopen, setjmp, Boost multiprecision | Objects compile; not proof of linking, host capabilities, JIT availability, or a runtime port. |
 
-### Native wasm32-wasip1: WASI-only nREPL exclusion follow-up
+### Native wasm32-wasip1: legacy EH through Wasmtime with GC on
+
+This AI-assisted follow-up gets the genuine **wasi-sdk 34.0 wasm32-wasip1**
+jank/Zig spike through flatten/spill and execution. It supersedes the historical
+Flatten boundary below. It does not use Emscripten, the ABI shim, a patched
+Binaryen, disabled GC or substitute runtime symbols.
+
+**Inspection:** SDK 34's `cmake/wasi-sdk-sysroot.cmake` builds its `eh` C++
+libraries with `-fwasm-exceptions -mllvm -wasm-use-legacy-eh=false`. The packaged
+variants are `eh` and `noeh` (plus LTO), not legacy/standardized EH. Changing
+only jank's compiler flags therefore cannot remove the SDK's `try_table`s.
+The new isolated runtime builder uses the SDK compiler's LLVM revision
+`895aa2c896ada719451be2e3673c83da8ddf1141`, plus the SDK 34 recipe's three patches
+(`llvm-pr-168449`, `llvm-pr-186054`, `llvm-undo-part-of-194317`), and verifies
+the source/patch download SHA256s. It follows the SDK's ABI version 2,
+exception/thread/filesystem/static-library settings but selects
+`-wasm-use-legacy-eh=true`. It rebuilds **libc++, libc++abi and libunwind**,
+not just the application. Nothing in the downloaded SDK/sysroot is overwritten.
+
+**Compile:** `build-wasi32-legacy-runtimes.sh` installs to ignored
+`.tools/wasi/legacy-runtimes`. `WASI_LEGACY_EH=1` selects separate
+`artifacts/build-wasi32-legacy` and `artifacts/wasi32-spike-legacy` directories,
+adds the explicit legacy flag to the runtime/generated C++ compilations and
+links against the rebuilt C++ libraries. Zig stays at 0.17.1 / `wasm32-wasi`.
+The complete runtime archive and all spike objects compile; the no-nREPL
+archive check still passes. No shared runtime source changed in this follow-up.
+
+Initial selective source extraction missed `llvm/utils/llvm-lit` and LLVM
+libc's shared headers (`shared/fp_bits.h`); including those source directories
+resolved the build setup failures. CMake 3.28.3 meets this source's current
+3.20 minimum: its repeated advisory about a future LLVM 24 minimum of 3.31
+does not indicate an unloaded environment or a failed build. No global tools
+were changed.
+
+**Link and transformations:** genuine SDK application link succeeds, with
+undefined symbols treated as errors and the isolated legacy libraries searched
+before SDK defaults. The pre-transform disassembly is checked, not assumed:
+
+```text
+WASI legacy EH inspection: try=29079 try_table=0
+EXIT=0
+```
+
+Stock Binaryen 133 successfully applies, in order:
+
+```text
+--flatten --spill-pointers --reorder-locals --coalesce-locals --reorder-locals
+--translate-to-exnref
+```
+
+These are separate invocations: exnref translation happens **after** spilling
+and local compaction. Both exit 0. Binaryen warns that flatten/coalesce are not
+fully compatible with DWARF; transformed source-level debug locations should
+not be treated as exact. The 4 MiB stack-first layout, static-root registration
+of `__global_base..__data_end` and enabled GC are retained.
+
+**Execution — primary result:** Wasmtime 50.0.2, `-W exceptions=y`, runs the
+transformed `artifacts/wasi32-spike-legacy/spike.wasm` in `continuous 20` mode.
+Both exact markers occur once in every iteration. Selected output:
+
+```text
+jank -> Zig: scalar and wide result checks passed
+jank -> Zig: borrowed-buffer checks passed
+STARTUP ITERATION 1/20: collections=12 used-bytes=11882496 heap-bytes=12124160 status=0
+STARTUP ITERATION 20/20: collections=12 used-bytes=11907072 heap-bytes=12124160 status=0
+startup diagnostic: exit=0 collections=12 gc-disabled=0
+EXIT=0
+STARTUP VERDICT: mode=continuous PASS iterations=20 passed=20 failed=0 exit=0
+```
+
+**Separate diagnostic only — unspilled original SDK module:** the original
+mixed-EH `artifacts/wasi32-spike/spike-unspilled.wasm` was translated to exnref
+without flatten/spill, then run **once per mode**, with a 120-second timeout.
+These controls are not the primary result and do not establish GC safety:
+
+| Mode | Observed output/result |
+| --- | --- |
+| GC on, `static-roots` | `gc-disabled=0`; neither marker; `wasm trap: uninitialized element` in `jank::runtime::reduce`, exit 134 |
+| GC disabled, `no-gc` | Both exact markers; `startup diagnostic: exit=0 collections=1 gc-disabled=1`, exit 0 |
+
+The GC-on control's trap is observed; its precise corruption/root-loss mechanism
+was not traced. The rebuilt-library isolated C++ EH control also succeeds:
+
+```text
+C++ exception caught: 42
+EXIT=0
+WASI32 EH VERDICT: PASS (isolated probe, not the jank runtime)
+```
+
+**Reproduction:** use the documented Ubuntu 24.04 `jank-host-build` container,
+native host/spike prerequisites and pinned Zig. From this directory:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasi32-target.sh deps
+for step in source configure build; do
+  docker exec --user 1000:1000 jank-host-build \
+    bash scripts/build-wasi32-legacy-runtimes.sh "$step" \
+    >"artifacts/logs/wasi/wasi32-legacy-runtimes-$step.log" 2>&1 || break
+done
+for step in configure build eh spike; do
+  docker exec --user 1000:1000 -e WASI_LEGACY_EH=1 jank-host-build \
+    bash scripts/build-wasi32-target.sh "$step" || break
+done
+# Diagnostic only, requires the original SDK-linked artifact from the next section:
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasi32-target.sh diagnostic
+```
+
+Logs are `artifacts/logs/wasi/wasi32-legacy-*.log` and separately
+`wasi32-diagnostic-{exnref,gc-on,gc-off}.log`. The original SDK build/module and
+its try_table failure are preserved in their unsuffixed directories.
+
+**Correctness and limits:** the existing validator requires 20/20 marker pairs,
+collections advancing (1 before startup to 12 afterwards), zero statuses and
+`gc-disabled=0`. This establishes the bounded spike result, not general WASI
+support or collector, filesystem, threading, unwind-cleanup or exception-lifetime
+correctness. The native/Emscripten suites were not rerun: only WASI-specific
+scripts and this README changed; shared runtime sources, build config and
+Emscripten scripts are unchanged from the preceding tested commit.
+
+### Historical WASI-only nREPL exclusion and Flatten blocker
+
+The legacy-EH follow-up above supersedes this earlier transformer boundary.
 
 This AI-assisted follow-up uses genuine **wasi-sdk 34.0 / wasm32-wasip1**,
 Zig 0.17.1, stock Binaryen 133 and Wasmtime 50.0.2. The full runtime archive

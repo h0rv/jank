@@ -6,8 +6,8 @@ import subprocess
 import sys
 
 root = pathlib.Path(sys.argv[1])
-out = root / 'artifacts/wasi32-spike'
-database = json.loads((root / 'artifacts/build-wasi32/compile_commands.json').read_text())
+build, out = map(pathlib.Path, sys.argv[2:])
+database = json.loads((build / 'compile_commands.json').read_text())
 entry = next(x for x in database if x['file'].endswith('/src/cpp/jank/runtime/context.cpp'))
 args = iter(shlex.split(entry['command']))
 flags = [next(args)]

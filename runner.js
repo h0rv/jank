@@ -21,7 +21,7 @@ function finish(state, message) {
 function fail(reason) {
   diagnostics.textContent += `${reason}\n`;
   run.disabled = true;
-  finish('fail', 'failed, see runtime log');
+  finish('fail', 'failed; requires memory64 and Wasm exceptions; see runtime log');
 }
 function start() {
   if (!module) return;

@@ -51,4 +51,6 @@ fi
   "$RUNTIME/lib/libjank-static-runtime.a" \
   "${runtime_libs[@]}" \
   "-Wl,-rpath,$RUNTIME/lib" -o "$OUT/jank-zig"
-(cd /tmp && "$OUT/jank-zig")
+(cd /tmp && "$OUT/jank-zig") | tee "$OUT/execution.log"
+grep -Fxq 'jank -> Zig: scalar and wide result checks passed' "$OUT/execution.log"
+grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' "$OUT/execution.log"

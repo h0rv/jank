@@ -14,6 +14,7 @@ pub fn build(b: *std.Build) void {
             .linkage = linkage,
             .root_module = module,
         });
+        lib.bundle_compiler_rt = true;
         b.installArtifact(lib);
     }
 }

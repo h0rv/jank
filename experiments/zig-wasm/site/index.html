@@ -3,26 +3,65 @@
 <html lang="en" data-status="running">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>jank-wasm · live AOT example</title>
+<title>jank-wasm</title>
 <link rel="stylesheet" href="style.css">
+<header class="bar">
+  <a class="name" href="index.html">jank-wasm</a>
+  <nav><a href="try.html">Build</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Notes</a><a href="https://github.com/h0rv/jank-wasm">GitHub</a></nav>
+</header>
 <main>
-  <header><a href="index.html">jank-wasm</a><nav><a href="try.html">Try it in the browser →</a></nav></header>
-  <p class="eyebrow">Pure jank · compiled ahead of time</p>
-  <h1>A small Clojure program.<br>A real Wasm run.</h1>
-  <p class="intro">This page runs <code>examples/hello-cljc</code>: three jank namespaces computing the weighted sum of <code>[1 2 3 4]</code>. No Zig library or JVM is involved in this example.</p>
-  <section class="terminal" aria-label="Live example output">
-    <div class="terminal-bar"><span>hello-cljc / browser</span><strong id="status" role="status">Loading Wasm…</strong></div>
+  <h1>jank-wasm</h1>
+  <p>A research fork of <a href="https://github.com/jank-lang/jank">jank</a> that compiles Clojure ahead of time to WebAssembly.</p>
+  <p>The program below was compiled to wasm64 with Emscripten before this page was published. Your browser runs the compiled module; there is no REPL or eval here.</p>
+
+  <h2>Live example</h2>
+  <p><code>examples/hello-cljc</code> is three namespaces of plain jank. No Zig or JVM is involved.</p>
+  <figure class="block">
+    <figcaption>src/hello/math.jank</figcaption>
+    <pre>(ns hello.math)
+
+(defn weighted [values]
+  (reduce + 0 (map-indexed (fn [index value] (* (inc index) value)) values)))</pre>
+  </figure>
+  <figure class="block">
+    <figcaption>src/hello/core.jank</figcaption>
+    <pre>(defn -main [&amp; _]
+  (platform/announce)
+  (assert (= 0 (math/weighted [])))
+  (let [answer (math/weighted [1 2 3 4])]
+    (assert (= 30 answer))
+    (platform/emit (str "weighted buffer: " answer)))
+  (platform/emit "hello: checks passed"))</pre>
+  </figure>
+  <figure class="block output" aria-label="Live example output">
+    <figcaption><span>Output</span><span id="status" role="status">Loading hello.wasm</span></figcaption>
     <pre id="app" aria-live="polite"></pre>
-    <details><summary>Runtime diagnostics</summary><pre id="stdout"></pre></details>
-  </section>
-  <noscript><p>This live example needs JavaScript and a memory64-capable browser.</p></noscript>
-  <p class="hint">Requires memory64 and Wasm exceptions. Chrome works; Safari likely will not. <a href="try.html">Requirements and build instructions →</a></p>
-  <section class="about"><h2>A research fork, not a portability promise.</h2>
-    <p>This is an AI-assisted research fork of <a href="https://github.com/jank-lang/jank">jank</a>, exploring an experimental wasm64 / Emscripten AOT pipeline. It is <strong>not general jank Wasm support</strong> and this is <strong>not a browser REPL</strong>: the program was compiled before deployment.</p>
-    <p>The demo uses explicit static roots and a private Binaryen spill transform. Ordinary unrooted startup still fails and general GC safety is unproven. The runtime now roots thrown jank objects and errors; arbitrary native exceptions with GC-managed fields are not covered.</p>
-    <p><a href="https://github.com/h0rv/jank-wasm">Fork source ↗</a> · <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Experiment evidence and limitations ↗</a></p>
-  </section>
-  <footer>AI-assisted research and site. Kept in this fork, not submitted upstream.</footer>
+    <details><summary>Runtime log</summary><pre id="stdout"></pre></details>
+  </figure>
+  <noscript><p>The example needs JavaScript and a browser with memory64.</p></noscript>
+  <p class="note">Needs memory64 and Wasm exceptions. Tested in Chrome 156; Safari probably will not run it. <a href="try.html">Build it yourself</a>.</p>
+
+  <h2>Status</h2>
+  <table>
+    <thead><tr><th>Target</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>wasm64, Emscripten, browser and Node</td><td>Runs with explicit static roots and a Binaryen spill pass. This page.</td></tr>
+      <tr><td>wasm32, Emscripten, Node</td><td>Runs the spike with the same roots and spill pass, 20 of 20 runs with GC on.</td></tr>
+      <tr><td>wasm32-wasip1, Wasmtime</td><td>Runs the spike, 20 of 20 runs with GC on. nREPL is left out.</td></tr>
+      <tr><td>Exceptions</td><td>The runtime roots thrown jank objects and errors, including rethrows and copied <code>exception_ptr</code>s.</td></tr>
+      <tr><td>Speed</td><td>Slower than ClojureScript on most <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/examples/bench-cljc/REPORT.md">benchmark kernels</a>; native <code>fib27</code> is faster.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Limits</h2>
+  <ul>
+    <li>Ahead of time only. No REPL, eval or general browser API layer, and no threads.</li>
+    <li>Startup fails without the explicit static roots. General GC safety is not proven.</li>
+    <li>Native exceptions that hold GC-managed objects are not rooted.</li>
+    <li>This is not general Wasm support for jank and is not part of upstream jank.</li>
+  </ul>
+  <p>Details and evidence are in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">experiment notes</a>.</p>
 </main>
+<footer>Research fork, kept out of upstream jank. Code and text written with AI assistance.</footer>
 <script src="runner.js"></script>
 </html>

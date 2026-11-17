@@ -3,45 +3,62 @@
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Try it in the browser · jank-wasm</title>
+<title>Build · jank-wasm</title>
 <link rel="stylesheet" href="style.css">
+<header class="bar">
+  <a class="name" href="index.html">jank-wasm</a>
+  <nav><a href="try.html" aria-current="page">Build</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Notes</a><a href="https://github.com/h0rv/jank-wasm">GitHub</a></nav>
+</header>
 <main>
-  <header><a href="index.html">jank-wasm</a><nav><a href="index.html">← Live example</a></nav></header>
-  <p class="eyebrow">Build locally · run in a browser</p>
-  <h1>Try it in the browser.</h1>
-  <p class="intro">This is an <strong>ahead-of-time (AOT)</strong> build, not a browser REPL. Edit your jank sources locally, compile them, then serve the resulting JavaScript and Wasm.</p>
-  <h2>Browser requirements</h2>
-  <p>You need <strong>memory64 (wasm64)</strong> and <strong>Wasm exceptions</strong>. Chrome works (tested with Chrome 156 without experimental Wasm flags). Safari likely will not; support varies by engine and version. If the <a href="index.html">live example</a> fails, inspect its runtime diagnostics and try current Chrome.</p>
-  <p>Use HTTP, not <code>file://</code>. Serve <code>.wasm</code> with <code>application/wasm</code>. This single-threaded demo does not require COOP/COEP headers.</p>
+  <h1>Build</h1>
+  <p>You write jank locally, compile it ahead of time, then serve the generated JavaScript and Wasm. Nothing is compiled in the browser.</p>
+
+  <h2>Browser</h2>
+  <p>The browser needs memory64 (wasm64) and Wasm exceptions. Chrome 156 runs it without flags. Safari probably will not, and support varies by engine version. If the <a href="index.html">live example</a> fails, open its runtime log.</p>
+  <p>Serve over HTTP, not <code>file://</code>, with <code>.wasm</code> as <code>application/wasm</code>. The demo is single-threaded, so COOP/COEP headers are not needed.</p>
+
   <h2>Build the example</h2>
-  <p>On Linux x86_64, have Docker, Python 3, curl, tar and Git available. The driver creates the <code>jank-host-build</code> Ubuntu 24.04 container and installs pinned compiler prerequisites there. SDK downloads and build products stay in ignored experiment directories. A clean bootstrap can take about 17 minutes; existing prerequisites are reused.</p>
-  <pre class="code">git clone https://github.com/h0rv/jank-wasm
+  <p>You need Linux x86_64 with Docker, Python 3, curl, tar and Git. The driver builds a <code>jank-host-build</code> Ubuntu 24.04 container and installs pinned compilers in it. Downloads and outputs stay in ignored directories. A clean build takes about 15 to 20 minutes; later builds reuse the toolchain.</p>
+  <figure class="block">
+    <figcaption>Shell</figcaption>
+    <pre>git clone https://github.com/h0rv/jank-wasm
 cd jank-wasm/experiments/zig-wasm
 ./jank-build build examples/hello-cljc
 ./jank-build serve --port 8765 examples/hello-cljc</pre>
-  <p>Open <code>http://127.0.0.1:8765/</code>. <code>build</code> builds both native and Wasm outputs; there is no <code>build browser</code> subcommand. <code>serve</code> serves existing Wasm files until Ctrl-C; it does not build or open a browser. <code>run browser</code> opens Chrome and keeps its server running.</p>
+  </figure>
+  <p>Then open <code>http://127.0.0.1:8765/</code>. <code>build</code> produces native and Wasm outputs; there is no <code>build browser</code> subcommand. <code>serve</code> serves files that already exist until Ctrl-C, and does not build or open a browser. <code>run browser</code> opens Chrome and keeps its server running.</p>
+
   <h2>Your own project</h2>
-  <p>Create <code>my-app/src/hello/core.cljc</code> with a <code>hello.core</code> namespace and a <code>-main</code> function. Add <code>my-app/jank-build.json</code>:</p>
-  <pre class="code">{
+  <p>Create <code>my-app/src/hello/core.cljc</code> with a <code>hello.core</code> namespace and a <code>-main</code> function, then add <code>my-app/jank-build.json</code>:</p>
+  <figure class="block">
+    <figcaption>my-app/jank-build.json</figcaption>
+    <pre>{
   "name": "my-app",
   "main": "hello.core",
   "jank": "src",
   "expect": ["hello: checks passed"]
 }</pre>
-  <ul>
-    <li><code>name</code>: unique safe output name; defaults to the project directory name.</li>
-    <li><code>main</code>: required namespace whose <code>-main</code> runs.</li>
-    <li><code>jank</code>: source directory inside the project; defaults to <code>src</code>.</li>
-    <li><code>expect</code>: required nonempty exact output lines, or an object with <code>native</code>, <code>node</code> and <code>browser</code> line lists. The checker requires these plus exit 0.</li>
-    <li><code>zig</code>: optional project-relative Zig source file. Omit it for pure jank; Zig is not what enables the Wasm build.</li>
-    <li><code>wasm_check</code>: defaults to <code>single</code>; <code>spike-continuous</code> is the research spike’s specialized 20-entry checker, not a generic project setting.</li>
-  </ul>
-  <pre class="code">./jank-build build my-app
+  </figure>
+  <table>
+    <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+    <tbody>
+      <tr><td><code>name</code></td><td>Output name. Defaults to the project directory name.</td></tr>
+      <tr><td><code>main</code></td><td>Required. The namespace whose <code>-main</code> runs.</td></tr>
+      <tr><td><code>jank</code></td><td>Source directory inside the project. Defaults to <code>src</code>.</td></tr>
+      <tr><td><code>expect</code></td><td>Required. Exact output lines, or an object with <code>native</code>, <code>node</code> and <code>browser</code> lists. The check needs these lines and exit 0.</td></tr>
+      <tr><td><code>zig</code></td><td>Optional Zig source file. Leave it out for pure jank; Wasm builds do not need Zig.</td></tr>
+      <tr><td><code>wasm_check</code></td><td>Defaults to <code>single</code>. <code>spike-continuous</code> is the research spike's 20-run checker.</td></tr>
+    </tbody>
+  </table>
+  <figure class="block">
+    <figcaption>Shell</figcaption>
+    <pre>./jank-build build my-app
 ./jank-build serve my-app</pre>
-  <p>Use the <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/zig-wasm/examples/hello-cljc">example’s platform layer</a> for browser DOM output versus native/Node stdout, with <code>#?(:wasm … :native …)</code>. Generic stdout is displayed by the generated page too. Outputs are under <code>artifacts/app/&lt;name&gt;/wasm/</code> and <code>native/</code>.</p>
-  <h2>Know the limits</h2>
-  <p>This AI-assisted research fork is not general jank Wasm support. The Emscripten pipeline uses static roots and a private Binaryen transform; ordinary startup and general GC rooting are not solved. The runtime roots thrown jank objects and errors, but not arbitrary native exceptions with GC-managed fields. No runtime eval, browser REPL, general browser API layer or thread support is supplied.</p>
-  <p><a href="https://github.com/h0rv/jank-wasm">Fork source ↗</a> · <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Full build requirements, evidence and limitations ↗</a></p>
-  <footer>AI-assisted research and site. Kept in this fork, not submitted upstream.</footer>
+  </figure>
+  <p>For browser output versus native or Node stdout, copy the <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/zig-wasm/examples/hello-cljc">example's platform layer</a>, which uses <code>#?(:wasm … :native …)</code>. The generated page also shows plain stdout. Outputs go to <code>artifacts/app/&lt;name&gt;/wasm/</code> and <code>native/</code>.</p>
+
+  <h2>Limits</h2>
+  <p>The Emscripten build depends on explicit static roots and a Binaryen spill pass. Startup without those roots fails, and GC safety in general is not proven. The runtime roots thrown jank objects and errors, but not native exceptions that hold GC-managed objects. There is no eval, REPL, browser API layer or thread support. The <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">experiment notes</a> have the full requirements and evidence.</p>
 </main>
+<footer>Research fork, kept out of upstream jank. Code and text written with AI assistance.</footer>
 </html>

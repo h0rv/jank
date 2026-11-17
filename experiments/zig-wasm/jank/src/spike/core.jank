@@ -1,0 +1,60 @@
+(ns spike.core)
+
+;; These are declarations, not a C++ implementation. The implementation is Zig.
+(cpp/raw "extern \"C\" long long spike_add(int, int);")
+(cpp/raw "#include <cstddef>
+#include <cstdint>
+#include <vector>
+extern \"C\" int spike_sum_i32(const std::int32_t*, std::size_t, std::int64_t*);")
+
+(defn check-buffer []
+  (let [buffer (cpp/new (std.vector std.int32_t))
+        out (cpp/new cpp/std.int64_t (cpp/std.int64_t. 99))]
+    (try
+      (cpp/.resize (cpp/* buffer) (cpp/std.size_t. 4))
+      (let [values (cpp/.data (cpp/* buffer))]
+        (cpp/= (cpp/aget values (cpp/int. 0)) (cpp/std.int32_t. 10))
+        (cpp/= (cpp/aget values (cpp/int. 1)) (cpp/std.int32_t. -3))
+        (cpp/= (cpp/aget values (cpp/int. 2)) (cpp/std.int32_t. 20))
+        (cpp/= (cpp/aget values (cpp/int. 3)) (cpp/std.int32_t. 15))
+        (assert (= 0 (cpp/spike_sum_i32 values (cpp/std.size_t. 4) out)))
+        (assert (= 42 (cpp/* out)))
+        (assert (= 0 (cpp/spike_sum_i32 values (cpp/std.size_t. 4) out)))
+        (assert (= 42 (cpp/* out)))
+        (assert (= 10 (cpp/aget values (cpp/int. 0))))
+        (assert (= -3 (cpp/aget values (cpp/int. 1))))
+        (assert (= 20 (cpp/aget values (cpp/int. 2))))
+        (assert (= 15 (cpp/aget values (cpp/int. 3))))
+        (cpp/= (cpp/aget values (cpp/int. 0)) (cpp/std.int32_t. 1))
+        (cpp/= (cpp/aget values (cpp/int. 1)) (cpp/std.int32_t. 2))
+        (cpp/= (cpp/aget values (cpp/int. 2)) (cpp/std.int32_t. 3))
+        (cpp/= (cpp/aget values (cpp/int. 3)) (cpp/std.int32_t. 4))
+        (assert (= 0 (cpp/spike_sum_i32 values (cpp/std.size_t. 4) out)))
+        (assert (= 10 (cpp/* out)))
+        (assert (= 0 (cpp/spike_sum_i32 values (cpp/std.size_t. 4) out)))
+        (assert (= 10 (cpp/* out)))
+        (assert (= 1 (cpp/aget values (cpp/int. 0))))
+        (assert (= 2 (cpp/aget values (cpp/int. 1))))
+        (assert (= 3 (cpp/aget values (cpp/int. 2))))
+        (assert (= 4 (cpp/aget values (cpp/int. 3))))
+        (assert (= 0 (cpp/spike_sum_i32 cpp/nullptr (cpp/std.size_t. 0) out)))
+        (assert (= 0 (cpp/* out)))
+        (cpp/= (cpp/* out) (cpp/std.int64_t. 99))
+        (assert (= 0 (cpp/spike_sum_i32 values (cpp/std.size_t. 0) out)))
+        (assert (= 0 (cpp/* out)))
+        (cpp/= (cpp/* out) (cpp/std.int64_t. 99))
+        (assert (= 1 (cpp/spike_sum_i32 cpp/nullptr (cpp/std.size_t. 1) out)))
+        (assert (= 99 (cpp/* out)))
+        (assert (= 1 (cpp/spike_sum_i32 cpp/nullptr (cpp/std.size_t. 0) cpp/nullptr))))
+      (finally
+        (cpp/delete out)
+        (cpp/delete buffer))))
+  (println "jank -> Zig: borrowed-buffer checks passed"))
+
+(defn -main [& _]
+  (let [answer (cpp/spike_add (cpp/int. 20) (cpp/int. 22))
+        wide (cpp/spike_add (cpp/int. 2147483647) (cpp/int. 2147483647))]
+    (assert (= 42 answer))
+    (assert (= 4294967294 wide))
+    (println "jank -> Zig: scalar and wide result checks passed"))
+  (check-buffer))

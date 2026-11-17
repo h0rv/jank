@@ -1,4 +1,6 @@
-#include <cpptrace/cpptrace.hpp>
+#ifndef __EMSCRIPTEN__
+  #include <cpptrace/cpptrace.hpp>
+#endif
 
 #include <jank/error.hpp>
 #include <jank/runtime/context.hpp>
@@ -533,6 +535,7 @@ namespace jank::error
     add_expansion_note(expansion);
   }
 
+#ifndef __EMSCRIPTEN__
   base::base(enum kind const k,
              jtl::immutable_string const &message,
              read::source const &source,
@@ -548,6 +551,8 @@ namespace jank::error
   {
     add_expansion_note(expansion);
   }
+
+#endif
 
   base::base(enum kind const k,
              read::source const &source,
@@ -648,6 +653,7 @@ namespace jank::error
     add_expansion_note(expansion);
   }
 
+#ifndef __EMSCRIPTEN__
   base::base(enum kind const k,
              jtl::immutable_string const &message,
              read::source const &source,
@@ -664,6 +670,8 @@ namespace jank::error
   {
     add_expansion_note(expansion);
   }
+
+#endif
 
   bool base::operator==(base const &rhs) const
   {
@@ -763,7 +771,9 @@ namespace jank::error
   error_ref internal_failure(jtl::immutable_string const &message)
   {
     auto const e{ make_error(kind::internal_failure, message, read::source::unknown()) };
+#ifndef __EMSCRIPTEN__
     e->trace = std::make_unique<cpptrace::raw_trace>(cpptrace::generate_raw_trace());
+#endif
     return e;
   }
 
@@ -775,7 +785,9 @@ namespace jank::error
   void throw_result_failure(jtl::immutable_string const &message)
   {
     auto const e{ make_error(kind::runtime_uncaught_exception, message, read::source::unknown()) };
+#ifndef __EMSCRIPTEN__
     e->trace = std::make_unique<cpptrace::raw_trace>(cpptrace::generate_raw_trace());
+#endif
     throw e;
   }
 }

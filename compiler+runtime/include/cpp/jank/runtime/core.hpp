@@ -2,6 +2,8 @@
 
 #include <regex>
 
+#include <jank/runtime/obj/delay.hpp>
+
 /* TODO: Remove these so that people include only what they need. */
 #include <jank/runtime/core/make_box.hpp>
 #include <jank/runtime/core/to_string.hpp>

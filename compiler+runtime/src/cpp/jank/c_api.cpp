@@ -66,7 +66,7 @@ extern "C"
   {
     jank::util::println("jank_eval_file_c {}", path);
     jank_object_ref ret{ jank_const_nil() };
-    cpptrace::try_catch([&] { ret = __rt_ctx->eval_file(path).unwrap_or(jank_nil).erase().raw(); },
+    util::try_catch([&] { ret = __rt_ctx->eval_file(path).unwrap_or(jank_nil).erase().raw(); },
                         [&](std::exception const &e) { jank::util::print_exception(e); },
                         [&](jank::runtime::object_ref const e) { jank::util::print_exception(e); },
                         [&](jank::error_ref const e) { jank::util::print_exception(e); },
@@ -172,7 +172,7 @@ extern "C"
     object_ref const a1_obj(reinterpret_cast<object *>(a1));
     object_ref const a2_obj(reinterpret_cast<object *>(a2));
     jank_object_ref ret{ jank_const_nil() };
-    cpptrace::try_catch([&] { ret = f_obj.call(a1_obj, a2_obj).erase().raw(); },
+    util::try_catch([&] { ret = f_obj.call(a1_obj, a2_obj).erase().raw(); },
                         [](std::exception const &e) { jank::util::print_exception(e); },
                         [](jank::runtime::object_ref const e) { jank::util::print_exception(e); },
                         [](jank::error_ref const e) { jank::util::print_exception(e); },
@@ -1120,7 +1120,9 @@ extern "C"
      * like strings, use the GC for allocations. It can still be configured later. */
     GC_set_all_interior_pointers(1);
     GC_init();
+#ifdef GC_THREADS
     GC_allow_register_threads();
+#endif
 
     {
       GC_word bm[GC_BITMAP_SIZE(jank::runtime::obj::persistent_string)]{ 0 };
@@ -1137,7 +1139,7 @@ extern "C"
   {
     int ret{};
 
-    cpptrace::try_catch(
+    util::try_catch(
       [&] {
         jank_init_base();
 

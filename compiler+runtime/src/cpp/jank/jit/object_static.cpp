@@ -6,8 +6,10 @@ namespace jank::jit
   {
   }
 
+#ifndef __EMSCRIPTEN__
   cpptrace::stacktrace_frame resolve_materialized_object_frame(cpptrace::stacktrace_frame frame)
   {
     return frame;
   }
+#endif
 }

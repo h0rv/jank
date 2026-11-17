@@ -45,6 +45,9 @@ option(jank_unity_build "Optimize translation unit compilation for the number of
 option(jank_debug_gc "Enable GC debug assertions" OFF)
 option(jank_profile_gc "Enable GC profiling (via massif or heaptrack)" OFF)
 option(jank_force_phase_2 "Force the linking of core libs into the jank binary" OFF)
+option(jank_cross_compile "Whether or not we are cross-compiling the static runtime" OFF)
+option(jank_emulated_tls "Use -femulated-tls (not supported on some platforms like musl)" ON)
+set(jank_host_compiler "" CACHE FILEPATH "When cross-compiling, use this as the native compiler")
 set(jank_sanitize "none" CACHE STRING "The type of Clang sanitization to use (or none)")
 set(jank_resource_dir
   "../lib/jank/${CMAKE_PROJECT_VERSION}"
@@ -70,7 +73,7 @@ set(jank_cxx_standard cxx_std_20)
 #   ${jank_link_whole_start} jank_common_lib ${jank_link_whole_end}
 #   ${jank_link_whole_start} nanobench_lib ${jank_link_whole_end}
 #
-if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+if(${CMAKE_SYSTEM_NAME} STREQUAL "Linux" OR ${CMAKE_SYSTEM_NAME} STREQUAL "Emscripten")
   set(jank_link_whole_start "-Wl,--whole-archive")
   set(jank_link_whole_end "-Wl,--no-whole-archive")
 elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Darwin")
@@ -107,15 +110,22 @@ set(
   -std=gnu++20
   -DJANK_VERSION="${jank_version}"
   -DJANK_CMAKE_BUILD_TYPE="${CMAKE_BUILD_TYPE}"
-  # https://groups.google.com/g/llvm-dev/c/W-OweiAjDcU?pli=1
-  -femulated-tls
-  -DGC_THREADS -DPOINTER_MASK=0x0000FFFFFFFFFFFF
+  -DPOINTER_MASK=0x0000FFFFFFFFFFFF
   -DIMMER_HAS_LIBGC=1 -DIMMER_TAGGED_NODE=0 -DHAVE_CXX14=1
   -DCPPINTEROP_USE_REPL
   -DFOLLY_HAVE_JEMALLOC=0 -DFOLLY_HAVE_TCMALLOC=0 -DFOLLY_ASSUME_NO_JEMALLOC=1 -DFOLLY_ASSUME_NO_TCMALLOC=1
   #-DLIBASSERT_STATIC_DEFINE=1
   #-stdlib=libc++
 )
+
+if(jank_emulated_tls)
+  # https://groups.google.com/g/llvm-dev/c/W-OweiAjDcU?pli=1
+  list(APPEND jank_common_compiler_flags -femulated-tls)
+endif()
+
+if(NOT DEFINED enable_threads OR enable_threads)
+  list(APPEND jank_common_compiler_flags -DGC_THREADS)
+endif()
 
 if (WIN32)
   list(APPEND jank_common_compiler_flags -DGC_NOT_DLL -DWIN32_LEAN_AND_MEAN)
@@ -147,6 +157,10 @@ elseif(CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
   set(jank_core_lib_optimization "-O3")
 endif()
 
+if(jank_cross_compile AND NOT jank_host_compiler)
+  message(FATAL_ERROR "Must specify a jank_host_compiler when cross-compiling the static runtime.")
+endif()
+
 # Enabling phase 2 builds means that we will compile all of our core jank
 # libraries to .cpp files and then compile those into our final jank binary.
 # We do this for release builds, for performance, or whenever it's forced
@@ -155,7 +169,10 @@ endif()
 # Normally, non-release builds, we compile the core jank libraries to object
 # files and then JIT load them on startup. This provides faster iteration, but
 # at the cost of a slower startup time.
-if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug" OR jank_force_phase_2)
+#
+# For cross-compiling, force phase 2 build because the whole point is to end up
+# with a full runtime built.
+if(NOT CMAKE_BUILD_TYPE STREQUAL "Debug" OR jank_force_phase_2 OR jank_cross_compile)
   set(jank_enable_phase_2 ON)
 else()
   set(jank_enable_phase_2 OFF)
@@ -238,15 +255,20 @@ include(cmake/sanitization.cmake)
 set(CMAKE_EXPORT_COMPILE_COMMANDS on)
 # Also include the system includes in the compile_commands.json so that weird
 # systems like NixOS can have tooling work properly.
-set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+if(NOT EMSCRIPTEN)
+  set(CMAKE_CXX_STANDARD_INCLUDE_DIRECTORIES ${CMAKE_CXX_IMPLICIT_INCLUDE_DIRECTORIES})
+endif()
 
 # ---- Clang/LLVM ----
 include(cmake/llvm.cmake)
 
 if(
-  NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
-  OR
-  NOT CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL CLANG_PACKAGE_VERSION
+  NOT jank_cross_compile
+  AND (
+    NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+    OR
+    NOT CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL CLANG_PACKAGE_VERSION
+  )
 )
   message(
     FATAL_ERROR
@@ -433,18 +455,24 @@ endif()
 
 configure_file(bin/ar-merge ar-merge USE_SOURCE_PERMISSIONS @ONLY)
 set(CMAKE_AR "${CMAKE_BINARY_DIR}/ar-merge${EXT_AR}")
-set(jank_standalone_dynamic_lib_deps
+set(jank_standalone_static_lib_deps
   jank_common_lib
-  jank_compiler_lib
-  jank_dynamic_lib
   jank_lib_phase_2
   jank_static_lib
-  cpptrace::cpptrace
   Boost::multiprecision
   nanobench_lib
   jankzip_lib
   bdwgc::gc bdwgc::gctba
   folly_lib
+)
+
+if(NOT EMSCRIPTEN)
+  list(APPEND jank_standalone_static_lib_deps cpptrace::cpptrace)
+endif()
+set(jank_standalone_dynamic_lib_deps
+  ${jank_standalone_static_lib_deps}
+  jank_compiler_lib
+  jank_dynamic_lib
   clangCppInterOp
 )
 
@@ -473,16 +501,28 @@ add_custom_target(
 
 add_custom_command(
   DEPENDS ${jank_standalone_dynamic_lib_deps} jank_exe_phase_2
-  OUTPUT ${CMAKE_BINARY_DIR}/libjank-dynamic-runtime.a ${CMAKE_BINARY_DIR}/libjank-static-runtime.a
+  OUTPUT ${CMAKE_BINARY_DIR}/libjank-dynamic-runtime.a
   COMMAND_EXPAND_LISTS
   VERBATIM
   COMMAND "${CMAKE_BINARY_DIR}/ar-merge${EXT_AR}" merge-phase-2-dynamic
-  COMMAND "${CMAKE_BINARY_DIR}/ar-merge${EXT_AR}" merge-phase-2-static
 )
 add_custom_target(
   jank_standalone_dynamic_lib_phase_2
   ALL
   DEPENDS ${CMAKE_BINARY_DIR}/libjank-dynamic-runtime.a
+)
+
+add_custom_command(
+  DEPENDS ${jank_standalone_static_lib_deps} jank_exe_phase_2
+  OUTPUT ${CMAKE_BINARY_DIR}/libjank-static-runtime.a
+  COMMAND_EXPAND_LISTS
+  VERBATIM
+  COMMAND "${CMAKE_BINARY_DIR}/ar-merge${EXT_AR}" merge-phase-2-static
+)
+add_custom_target(
+  jank_standalone_static_lib_phase_2
+  ALL
+  DEPENDS ${CMAKE_BINARY_DIR}/libjank-static-runtime.a
 )
 
 # ---- Other dependencies ----
@@ -491,7 +531,18 @@ set(BUILD_SHARED_LIBS OFF)
 
 include(FetchContent)
 include(cmake/dependency/bdwgc.cmake)
-include(cmake/dependency/cpptrace.cmake)
+if(NOT EMSCRIPTEN)
+  include(cmake/dependency/cpptrace.cmake)
+else()
+  set(ZSTD_BUILD_PROGRAMS OFF CACHE BOOL "Build zstd programs")
+  set(ZSTD_BUILD_SHARED OFF CACHE BOOL "Build shared zstd")
+  set(ZSTD_MULTITHREAD_SUPPORT OFF CACHE BOOL "Build threaded zstd")
+  FetchContent_Declare(zstd
+    URL https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz
+    URL_HASH SHA256=eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3
+    SOURCE_SUBDIR build/cmake)
+  FetchContent_MakeAvailable(zstd)
+endif()
 include(cmake/dependency/cppinterop.cmake)
 include(cmake/dependency/boost-multiprecision.cmake)
 include(cmake/dependency/folly.cmake)
@@ -630,6 +681,7 @@ add_library(
   src/cpp/jank/runtime/behavior/metadatable.cpp
   src/cpp/jank/codegen/api.cpp
   src/cpp/jank/aot/resource.cpp
+  src/cpp/jank/aot/target_config.cpp
 
   # Native module sources.
   src/cpp/clojure/string_native.cpp
@@ -670,12 +722,15 @@ target_include_directories(
 
 target_link_libraries(
   jank_common_lib PRIVATE
-  cpptrace::cpptrace
   Boost::multiprecision
   Boost::boost
   nanobench_lib
   bdwgc::gc bdwgc::gctba
 )
+
+if(NOT EMSCRIPTEN)
+  target_link_libraries(jank_common_lib PRIVATE cpptrace::cpptrace)
+endif()
 
 if(NOT WIN32)
   target_link_libraries(jank_common_lib PUBLIC libzstd_static)
@@ -703,29 +758,10 @@ foreach(dir ${jank_lib_includes_prop})
   endif()
 endforeach()
 
-set(jank_lib_linker_flags_list "")
-
-get_target_property(jank_lib_link_dirs_prop jank_common_lib LINK_DIRECTORIES)
-foreach(lib ${jank_lib_link_dirs_prop})
-  list(APPEND jank_lib_linker_flags_list -L${lib})
-endforeach()
-list(APPEND jank_lib_linker_flags_list ${jank_linker_flags})
-list(APPEND jank_lib_linker_flags_list ${CMAKE_CXX_FLAGS})
-list(APPEND jank_lib_linker_flags_list ${CMAKE_SHARED_LINKER_FLAGS})
-list(JOIN jank_lib_linker_flags_list " " jank_lib_linker_flags_unescaped)
-string(REPLACE "\"" "\\\"" jank_lib_linker_flags_str "${jank_lib_linker_flags_unescaped}")
-
-# Build a string of all of our JIT compilation flags so we can load them up in the runtime.
-set(jank_jit_compile_flags_list ${jank_common_compiler_flags} ${jank_jit_compiler_flags} ${jank_lib_includes})
-list(JOIN jank_jit_compile_flags_list " " jank_jit_compile_flags_str_unescaped)
-string(REPLACE "\"" "\\\"" jank_jit_compile_flags_str "${jank_jit_compile_flags_str_unescaped}")
-
 target_compile_options(
   jank_common_lib
   PUBLIC
   -DJANK_CLANG_PREFIX="${CLANG_INSTALL_PREFIX}"
-  -DJANK_JIT_FLAGS="${jank_jit_compile_flags_str}"
-  -DJANK_AOT_FLAGS="${jank_lib_linker_flags_str}"
 )
 target_link_options(jank_common_lib PRIVATE ${jank_linker_flags})
 set_target_properties(jank_common_lib PROPERTIES ENABLE_EXPORTS 1)
@@ -929,15 +965,28 @@ endif()
 
 # ---- jank phase 2 executable ----
 if(jank_enable_phase_2)
-  add_executable(
-    jank_exe_phase_2
-    "$<TARGET_PROPERTY:jank_exe_phase_1,SOURCES>"
-    ${jank_clojure_core_output}
-    ${jank_nrepl_server_outputs}
-  )
-  add_executable(jank::exe ALIAS jank_exe_phase_2)
-  set_property(TARGET jank_exe_phase_2 PROPERTY OUTPUT_NAME jank)
-  jank_hook_llvm(jank_exe_phase_2)
+  if(jank_cross_compile)
+    # Insert a dummy phase-2 target in order to trigger compilation of the
+    # core-libs cpp/object files. Other CMake targets depend on these byproducts
+    # implicitly.
+    add_library(
+      jank_exe_phase_2
+      ${jank_clojure_core_output}
+      ${jank_nrepl_server_outputs}
+    )
+    set_property(TARGET jank_exe_phase_2 PROPERTY OUTPUT_NAME jank-phase-2-dummy)
+  else()
+    add_executable(
+      jank_exe_phase_2
+      "$<TARGET_PROPERTY:jank_exe_phase_1,SOURCES>"
+      ${jank_clojure_core_output}
+      ${jank_nrepl_server_outputs}
+    )
+    set_property(TARGET jank_exe_phase_2 PROPERTY OUTPUT_NAME jank)
+    jank_hook_llvm(jank_exe_phase_2)
+
+    add_executable(jank::exe ALIAS jank_exe_phase_2)
+  endif()
 
   # Our generated code is not as precisely written as hand-written C++, so we ignore various
   # warnings and skip linting.
@@ -985,6 +1034,7 @@ if(jank_test)
     test/cpp/jank/util/fmt.cpp
     test/cpp/jank/util/path.cpp
     test/cpp/jank/util/sha256.cpp
+    test/cpp/jank/util/try.cpp
     test/cpp/jank/read/lex.cpp
     test/cpp/jank/read/parse.cpp
     test/cpp/jank/runtime/behavior/call.cpp
@@ -1116,13 +1166,24 @@ add_custom_target(
 # first build or after a clean), when any of the jank sources for these libs
 # change, or whenever the jank binary changes.
 set(jank_core_libraries_flag "${CMAKE_BINARY_DIR}/classes/core-libraries")
+
+# For cross-compiling, we use the host compiler to build the jank core
+# objects. For native compiling, we use the phase-1 that we just built.
+if(jank_cross_compile)
+  set(jank_core_libs_compiler ${jank_host_compiler})
+  set(jank_core_libs_deps ${jank_core_libs_compiler} ${jank_clojure_core_sources} ${jank_other_core_sources})
+else()
+  set(jank_core_libs_compiler ${CMAKE_BINARY_DIR}/jank-phase-1${CMAKE_EXECUTABLE_SUFFIX})
+  set(jank_core_libs_deps ${jank_core_libs_compiler} ${jank_clojure_core_sources} ${jank_other_core_sources} ${jank_incremental_pch_flag})
+endif()
+
 add_custom_command(
-  DEPENDS ${CMAKE_BINARY_DIR}/jank-phase-1${CMAKE_EXECUTABLE_SUFFIX} ${jank_clojure_core_sources} ${jank_other_core_sources} ${jank_incremental_pch_flag}
+  DEPENDS ${jank_core_libs_deps}
   OUTPUT ${jank_core_libraries_flag}
   BYPRODUCTS ${jank_clojure_core_output} ${jank_nrepl_server_outputs}
-  COMMAND ${CMAKE_BINARY_DIR}/jank-phase-1${CMAKE_EXECUTABLE_SUFFIX} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs --output-target object clojure.core
-  COMMAND ${CMAKE_BINARY_DIR}/jank-phase-1${CMAKE_EXECUTABLE_SUFFIX} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs ${jank_core_lib_output_target} clojure.core
-  COMMAND ${CMAKE_BINARY_DIR}/jank-phase-1${CMAKE_EXECUTABLE_SUFFIX} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs ${jank_core_lib_output_target} jank.nrepl.server.core
+  COMMAND ${jank_core_libs_compiler} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs --output-target object clojure.core
+  COMMAND ${jank_core_libs_compiler} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs ${jank_core_lib_output_target} clojure.core
+  COMMAND ${jank_core_libs_compiler} ${jank_core_lib_optimization} --force-binary-version 0 compile-module --target-dir ${CMAKE_BINARY_DIR}/core-libs ${jank_core_lib_output_target} jank.nrepl.server.core
   COMMAND touch ${jank_core_libraries_flag}
 )
 add_custom_target(
@@ -1138,8 +1199,12 @@ add_custom_target(
 file(COPY ${CMAKE_SOURCE_DIR}/../.clang-format DESTINATION ${CMAKE_BINARY_DIR})
 # ---- Clang format YAML ----
 
+# ---- Compilation target ----
+include(cmake/target_json.cmake)
+# ---- Compilation target ----
+
 # ---- Install rules ----
-if(NOT CMAKE_SKIP_INSTALL_RULES AND jank_enable_phase_2)
+if(NOT CMAKE_SKIP_INSTALL_RULES AND jank_enable_phase_2 AND NOT jank_cross_compile)
   include(cmake/install.cmake)
 endif()
 # ---- Install rules ----

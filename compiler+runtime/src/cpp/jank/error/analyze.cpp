@@ -1,4 +1,6 @@
-#include <cpptrace/cpptrace.hpp>
+#ifndef __EMSCRIPTEN__
+  #include <cpptrace/cpptrace.hpp>
+#endif
 
 #include <jank/error/analyze.hpp>
 #include <jank/runtime/rtti.hpp>
@@ -169,6 +171,7 @@ namespace jank::error
     return make_error(kind::analyze_unresolved_symbol, message, source, expansion);
   }
 
+#ifndef __EMSCRIPTEN__
   error_ref analyze_macro_expansion_exception(std::exception const &e,
                                               cpptrace::raw_trace const &trace,
                                               read::source const &source,
@@ -207,6 +210,8 @@ namespace jank::error
                       e,
                       std::make_unique<cpptrace::raw_trace>(trace));
   }
+
+#endif
 
   error_ref analyze_invalid_cpp_operator_call(jtl::immutable_string const &message,
                                               read::source const &source,

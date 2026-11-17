@@ -18,7 +18,7 @@ This is compiler/runtime research, not a production-ready web framework project.
 
 ## Repository and starting revision
 
-- The fork is `https://github.com/h0rv/jank`.
+- The fork is `https://github.com/h0rv/jank-wasm`.
 - The research branch is `research/zig-wasm`.
 - `origin` is the user's fork. `upstream` is `jank-lang/jank`.
 - The branch starts from upstream PR #1107, `https://github.com/jank-lang/jank/pull/1107`.

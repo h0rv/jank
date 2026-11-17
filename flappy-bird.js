@@ -221,6 +221,8 @@ var isFileURI = (filename) => filename.startsWith('file://');
 
 var runtimeInitialized = false;
 
+var runtimeExited = false;
+
 
 
 // When ALLOW_MEMORY_GROWTH is enabled, the conversion from Wasm
@@ -274,6 +276,16 @@ TTY.init();
   FS.ignorePermissions = false;
   // End ATPOSTCTORS hooks
 
+}
+
+function exitRuntime() {
+  ___funcs_on_exit(); // Native atexit() functions
+  // Begin ATEXITS hooks
+  callRuntimeCallbacks(onExits);
+FS.quit();
+TTY.shutdown();
+  // End ATEXITS hooks
+  runtimeExited = true;
 }
 
 function postRun() {
@@ -396,6 +408,10 @@ async function instantiateAsync(binary, binaryFile, imports) {
 }
 
 function getWasmImports() {
+  // instrumenting imports is used in asyncify in two ways: to add assertions
+  // that check for proper import use, and for JSPI we use them to set up
+  // the Promise API on the import side.
+  Asyncify.instrumentWasmImports(wasmImports);
   // prepare imports
   var imports = {
     'env': wasmImports,
@@ -412,6 +428,8 @@ async function createWasm() {
   // performing other necessary setup
   function receiveInstance(instance) {
     wasmExports = instance.exports;
+
+    wasmExports = Asyncify.instrumentWasmExports(wasmExports);
 
     wasmExports = applySignatureConversions(wasmExports);
 
@@ -476,7 +494,7 @@ async function createWasm() {
   var onPreRuns = [];
   var addOnPreRun = (cb) => onPreRuns.push(cb);
 
-  var noExitRuntime = true;
+  var noExitRuntime = false;
 
   /** @type {!Uint8Array} */
   var HEAPU8;
@@ -2711,6 +2729,7 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
   quit() {
         FS.initialized = false;
         // force-flush all streams, so we get musl std streams printed out
+        _fflush(0);
         // close all of our streams
         for (var stream of FS.streams) {
           if (stream) {
@@ -3561,12 +3580,20 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
       return 0;
     ;
   }
+  var onExits = [];
+  var addOnExit = (cb) => onExits.push(cb);
   var JSEvents = {
   removeAllEventListeners() {
         while (JSEvents.eventHandlers.length) {
           JSEvents._removeHandler(JSEvents.eventHandlers.length - 1);
         }
         JSEvents.deferredCalls = [];
+      },
+  registerRemoveEventListeners() {
+        if (!JSEvents.removeEventListenersRegistered) {
+          addOnExit(JSEvents.removeAllEventListeners);
+          JSEvents.removeEventListenersRegistered = true;
+        }
       },
   inEventHandler:0,
   deferredCalls:[],
@@ -3648,6 +3675,7 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
                                                eventHandler.eventListenerFunc,
                                                eventHandler.useCapture);
           JSEvents.eventHandlers.push(eventHandler);
+          JSEvents.registerRemoveEventListeners();
         } else {
           for (var i = 0; i < JSEvents.eventHandlers.length; ++i) {
             if (JSEvents.eventHandlers[i].target == eventHandler.target
@@ -6695,6 +6723,63 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
       }
       return -1;
     };
+  var runtimeKeepaliveCounter = 0;
+  var runtimeKeepalivePop = () => {
+      runtimeKeepaliveCounter -= 1;
+    };
+  var runtimeKeepalivePush = () => {
+      runtimeKeepaliveCounter += 1;
+    };
+  var Asyncify = {
+  instrumentWasmImports(imports) {
+        var importPattern = /^(invoke_.*|__asyncjs__.*)$/;
+  
+        for (let [x, original] of Object.entries(imports)) {
+          if (typeof original === 'function') {
+            let isAsyncifyImport = original.isAsync || importPattern.test(x);
+            // Wrap async imports with a suspending WebAssembly function.
+            if (isAsyncifyImport) {
+              imports[x] = original = new WebAssembly.Suspending(original);
+            }
+          }
+        }
+      },
+  instrumentWasmExports(exports) {
+        var exportPattern = /^(main|__main_argc_argv)$/;
+        Asyncify.asyncExports = new Set();
+        var ret = {};
+        for (let [x, original] of Object.entries(exports)) {
+          if (typeof original === 'function') {
+            // Wrap all exports with a promising WebAssembly function.
+            let isAsyncifyExport = exportPattern.test(x);
+            if (isAsyncifyExport) {
+              Asyncify.asyncExports.add(original);
+              original = Asyncify.makeAsyncFunction(original);
+            }
+            ret[x] = original;
+          } else {
+            ret[x] = original;
+          }
+        }
+        return ret;
+      },
+  asyncExports:null,
+  isAsyncExport(func) {
+        return Asyncify.asyncExports?.has(func);
+      },
+  handleAsync:async (startAsync) => {
+        runtimeKeepalivePush();
+        try {
+          return await startAsync();
+        } finally {
+          runtimeKeepalivePop();
+        }
+      },
+  handleSleep:(startAsync) => Asyncify.handleAsync(() => new Promise(startAsync)),
+  makeAsyncFunction(original) {
+        return WebAssembly.promising(original);
+      },
+  };
   var wasmTableMirror = [];
   var getWasmTableEntry = (funcPtr) => {
       // Function pointers should show up as numbers, even under wasm64, but
@@ -6705,6 +6790,9 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
       if (!func) {
         /** @suppress {checkTypes} */
         wasmTableMirror[funcPtr] = func = wasmTable.get(BigInt(funcPtr));
+        if (Asyncify.isAsyncExport(func)) {
+          wasmTableMirror[funcPtr] = func = Asyncify.makeAsyncFunction(func);
+        }
       }
       return func;
     };
@@ -6919,281 +7007,6 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
   
       if (_emscripten_sample_gamepad_data()) return -1;
       return registerGamepadEventCallback(2, userData, useCapture, callbackfunc, 27, 'gamepaddisconnected', targetThread);
-    ;
-  }
-  var handleException = (e) => {
-      // Certain exception types we do not treat as errors since they are used for
-      // internal control flow.
-      // 1. ExitStatus, which is thrown by exit()
-      // 2. "unwind", which is thrown by emscripten_unwind_to_js_event_loop() and others
-      //    that wish to return to JS event loop.
-      if (e instanceof ExitStatus || e == 'unwind') {
-        return EXITSTATUS;
-      }
-      quit_(1, e);
-    };
-  var runtimeKeepaliveCounter = 0;
-  var keepRuntimeAlive = () => noExitRuntime || runtimeKeepaliveCounter > 0;
-  var _proc_exit = (code) => {
-      EXITSTATUS = code;
-      if (!keepRuntimeAlive()) {
-        Module['onExit']?.(code);
-        ABORT = true;
-      }
-      quit_(code, new ExitStatus(code));
-    };
-  /** @param {boolean|number=} implicit */
-  var exitJS = (status, implicit) => {
-      EXITSTATUS = status;
-  
-      _proc_exit(status);
-    };
-  var maybeExit = () => {
-      if (!keepRuntimeAlive()) {
-        try {
-          _exit(EXITSTATUS);
-        } catch (e) {
-          handleException(e);
-        }
-      }
-    };
-  var callUserCallback = (func, ...args) => {
-      if (ABORT) {
-        return;
-      }
-      try {
-        return func(...args);
-      } catch (e) {
-        handleException(e);
-      } finally {
-        maybeExit();
-      }
-    };
-  var _emscripten_set_main_loop_timing = (mode, value) => {
-      MainLoop.timingMode = mode;
-      MainLoop.timingValue = value;
-  
-      if (!MainLoop.func) {
-        return 1; // Return non-zero on failure, can't set timing mode when there is no main loop.
-      }
-  
-      if (mode == 0) {
-        MainLoop.scheduler = function MainLoop_scheduler_setTimeout() {
-          var timeUntilNextTick = Math.max(0, MainLoop.tickStartTime + value - _emscripten_get_now())|0;
-          setTimeout(MainLoop.runner, timeUntilNextTick); // doing this each time means that on exception, we stop
-        };
-      } else if (mode == 1) {
-        MainLoop.scheduler = function MainLoop_scheduler_rAF() {
-          MainLoop.requestAnimationFrame(MainLoop.runner);
-        };
-      } else {
-        if (!MainLoop.setImmediate) {
-          if (globalThis.scheduler) {
-            // Some modern browsers implement scheduler.postTask, but not all.
-            MainLoop.setImmediate = scheduler.postTask.bind(scheduler);
-          } else if (globalThis.setImmediate) {
-            MainLoop.setImmediate = setImmediate;
-          } else {
-            // Emulate setImmediate. (note: not a complete polyfill, we don't emulate clearImmediate() to keep code size to minimum, since not needed)
-            var setImmediates = [];
-            var emscriptenMainLoopMessageId = 'setimmediate';
-            /** @param {Event} event */
-            var MainLoop_setImmediate_messageHandler = (event) => {
-              if (event.data === emscriptenMainLoopMessageId) {
-                event.stopPropagation();
-                setImmediates.shift()();
-              }
-            };
-            addEventListener('message', MainLoop_setImmediate_messageHandler, true);
-            MainLoop.setImmediate = /** @type{function(function(): ?, ...?): number} */((func) => {
-              setImmediates.push(func);
-              if (ENVIRONMENT_IS_WORKER) {
-                // The postMessge API in a Worker, sends message to the main
-                // thread and does not support the `targetOrigin` (*) argument.
-                postMessage(emscriptenMainLoopMessageId);
-              } else {
-                postMessage(emscriptenMainLoopMessageId, '*');
-              }
-            });
-          }
-        }
-        MainLoop.scheduler = function MainLoop_scheduler_setImmediate() {
-          MainLoop.setImmediate(MainLoop.runner);
-        };
-      }
-      return 0;
-    };
-  var MainLoop = {
-  func:null,
-  scheduler:null,
-  currentlyRunningMainloop:0,
-  arg:0,
-  timingMode:0,
-  timingValue:0,
-  currentFrameNumber:0,
-  queue:[],
-  preMainLoop:[],
-  postMainLoop:[],
-  pause() {
-        if (MainLoop.scheduler) {
-          MainLoop.scheduler = null;
-          // Incrementing this signals the previous main loop that it's now become old, and it must return.
-          MainLoop.currentlyRunningMainloop++;
-          
-        }
-      },
-  resume() {
-        MainLoop.currentlyRunningMainloop++;
-        var timingMode = MainLoop.timingMode;
-        var timingValue = MainLoop.timingValue;
-        var func = MainLoop.func;
-        MainLoop.func = null;
-        // do not set timing and call scheduler, we will do it on the next lines
-        setMainLoop(func, 0, false, MainLoop.arg, true);
-        _emscripten_set_main_loop_timing(timingMode, timingValue);
-        MainLoop.scheduler();
-      },
-  updateStatus() {
-        if (Module['setStatus']) {
-          var message = Module['statusMessage'] || 'Please wait...';
-          var remaining = MainLoop.remainingBlockers ?? 0;
-          var expected = MainLoop.expectedBlockers ?? 0;
-          if (remaining) {
-            if (remaining < expected) {
-              Module['setStatus'](`${message} (${expected - remaining}/${expected})`);
-            } else {
-              Module['setStatus'](message);
-            }
-          } else {
-            Module['setStatus']('');
-          }
-        }
-      },
-  init() {
-      },
-  runIter(func) {
-        if (ABORT) return;
-        for (var pre of MainLoop.preMainLoop) {
-          if (pre() === false) {
-            return; // |return false| skips a frame
-          }
-        }
-        callUserCallback(func);
-        for (var post of MainLoop.postMainLoop) {
-          post();
-        }
-      },
-  nextRAF:0,
-  fakeRequestAnimationFrame(func) {
-        // try to keep 60fps between calls to here
-        var now = Date.now();
-        if (!MainLoop.nextRAF) {
-          MainLoop.nextRAF = now + 1000/60;
-        } else {
-          while (now + 2 >= MainLoop.nextRAF) { // fudge a little, to avoid timer jitter causing us to do lots of delay:0
-            MainLoop.nextRAF += 1000/60;
-          }
-        }
-        var delay = Math.max(MainLoop.nextRAF - now, 0);
-        setTimeout(func, delay);
-      },
-  requestAnimationFrame(func) {
-        if (globalThis.requestAnimationFrame) {
-          requestAnimationFrame(func);
-        } else {
-          MainLoop.fakeRequestAnimationFrame(func);
-        }
-      },
-  };
-  
-    /**
-   * @param {number=} arg
-   * @param {boolean=} noSetTiming
-   */
-  var setMainLoop = (iterFunc, fps, simulateInfiniteLoop, arg, noSetTiming) => {
-      MainLoop.func = iterFunc;
-      MainLoop.arg = arg;
-  
-      var thisMainLoopId = MainLoop.currentlyRunningMainloop;
-      function checkIsRunning() {
-        if (thisMainLoopId < MainLoop.currentlyRunningMainloop) {
-          maybeExit();
-          return false;
-        }
-        return true;
-      }
-  
-      // We create the loop runner here but it is not actually running until
-      // _emscripten_set_main_loop_timing is called (which might happen at a
-      // later time).
-      MainLoop.runner = function MainLoop_runner() {
-        if (ABORT) return;
-        if (MainLoop.queue.length > 0) {
-          var start = Date.now();
-          var blocker = MainLoop.queue.shift();
-          blocker.func(blocker.arg);
-          if (MainLoop.remainingBlockers) {
-            var remaining = MainLoop.remainingBlockers;
-            var next = remaining%1 == 0 ? remaining-1 : Math.floor(remaining);
-            if (blocker.counted) {
-              MainLoop.remainingBlockers = next;
-            } else {
-              // not counted, but move the progress along a tiny bit
-              next = next + 0.5; // do not steal all the next one's progress
-              MainLoop.remainingBlockers = (8*remaining + next)/9;
-            }
-          }
-          MainLoop.updateStatus();
-  
-          // catches pause/resume main loop from blocker execution
-          if (!checkIsRunning()) return;
-  
-          setTimeout(MainLoop.runner, 0);
-          return;
-        }
-  
-        // catch pauses from non-main loop sources
-        if (!checkIsRunning()) return;
-  
-        // Implement very basic swap interval control
-        MainLoop.currentFrameNumber = MainLoop.currentFrameNumber + 1 | 0;
-        if (MainLoop.timingMode == 1 && MainLoop.timingValue > 1 && MainLoop.currentFrameNumber % MainLoop.timingValue != 0) {
-          // Not the scheduled time to render this frame - skip.
-          MainLoop.scheduler();
-          return;
-        } else if (MainLoop.timingMode == 0) {
-          MainLoop.tickStartTime = _emscripten_get_now();
-        }
-  
-        MainLoop.runIter(iterFunc);
-  
-        // catch pauses from the main loop itself
-        if (!checkIsRunning()) return;
-  
-        MainLoop.scheduler();
-      }
-  
-      if (!noSetTiming) {
-        if (fps > 0) {
-          _emscripten_set_main_loop_timing(0, 1000.0 / fps);
-        } else {
-          // Do rAF by rendering each frame (no decimating)
-          _emscripten_set_main_loop_timing(1, 1);
-        }
-  
-        MainLoop.scheduler();
-      }
-  
-      if (simulateInfiniteLoop) {
-        throw 'unwind';
-      }
-    };
-  function _emscripten_set_main_loop(func, fps, simulateInfiniteLoop) {
-    func = bigintToI53Checked(func);
-  
-  
-      var iterFunc = getWasmTableEntry(func);
-      setMainLoop(iterFunc, fps, simulateInfiniteLoop);
     ;
   }
   function _emscripten_set_mousemove_callback_on_thread(target, userData, useCapture, callbackfunc, targetThread) {
@@ -7460,6 +7273,12 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
   
   return document.title = UTF8ToString(title);
   }
+  var _emscripten_sleep = function(ms) {
+    let innerFunc =  () => new Promise((resolve) => setTimeout(resolve, ms));
+    return Asyncify.handleAsync(innerFunc);
+  }
+  ;
+  _emscripten_sleep.isAsync = true;
   var ENV = {
   };
   var getExecutableName = () => thisProgram;
@@ -7523,7 +7342,25 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
       return 0;
     ;
   }
-
+  var keepRuntimeAlive = () => noExitRuntime || runtimeKeepaliveCounter > 0;
+  var _proc_exit = (code) => {
+      EXITSTATUS = code;
+      if (!keepRuntimeAlive()) {
+        Module['onExit']?.(code);
+        ABORT = true;
+      }
+      quit_(code, new ExitStatus(code));
+    };
+  /** @param {boolean|number=} implicit */
+  var exitJS = (status, implicit) => {
+      EXITSTATUS = status;
+  
+      if (!keepRuntimeAlive()) {
+        exitRuntime();
+      }
+  
+      _proc_exit(status);
+    };
   function _fd_close(fd) {
   try {
   
@@ -7722,13 +7559,52 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
 
 
 
+
+
+
+
+  var handleException = (e) => {
+      // Certain exception types we do not treat as errors since they are used for
+      // internal control flow.
+      // 1. ExitStatus, which is thrown by exit()
+      // 2. "unwind", which is thrown by emscripten_unwind_to_js_event_loop() and others
+      //    that wish to return to JS event loop.
+      if (e instanceof ExitStatus || e == 'unwind') {
+        return EXITSTATUS;
+      }
+      quit_(1, e);
+    };
+  var maybeExit = () => {
+      if (runtimeExited) {
+        return;
+      }
+      if (!keepRuntimeAlive()) {
+        try {
+          _exit(EXITSTATUS);
+        } catch (e) {
+          handleException(e);
+        }
+      }
+    };
+  var callUserCallback = (func, ...args) => {
+      if (runtimeExited || ABORT) {
+        return;
+      }
+      try {
+        return func(...args);
+      } catch (e) {
+        handleException(e);
+      } finally {
+        maybeExit();
+      }
+    };
   /** @param {number=} timeout */
   var safeSetTimeout = (func, timeout) => {
-      
+      runtimeKeepalivePush();
       var id = safeSetTimeout.nextId++;
       safeSetTimeout.pending.set(id, setTimeout(() => {
         safeSetTimeout.pending.delete(id);
-        
+        runtimeKeepalivePop();
         callUserCallback(func);
       }, timeout));
       return id;
@@ -8193,6 +8069,230 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
         this.charFunc = 0; // GLFWcharfun
         this.userptr = 0;
       }
+  var _emscripten_set_main_loop_timing = (mode, value) => {
+      MainLoop.timingMode = mode;
+      MainLoop.timingValue = value;
+  
+      if (!MainLoop.func) {
+        return 1; // Return non-zero on failure, can't set timing mode when there is no main loop.
+      }
+  
+      // If there is no existing scheduler then we are transitioning from
+      // inactive to active and we add to runtime keepalive counter.
+      if (!MainLoop.scheduler) {
+        runtimeKeepalivePush();
+      }
+      if (mode == 0) {
+        MainLoop.scheduler = function MainLoop_scheduler_setTimeout() {
+          var timeUntilNextTick = Math.max(0, MainLoop.tickStartTime + value - _emscripten_get_now())|0;
+          setTimeout(MainLoop.runner, timeUntilNextTick); // doing this each time means that on exception, we stop
+        };
+      } else if (mode == 1) {
+        MainLoop.scheduler = function MainLoop_scheduler_rAF() {
+          MainLoop.requestAnimationFrame(MainLoop.runner);
+        };
+      } else {
+        if (!MainLoop.setImmediate) {
+          if (globalThis.scheduler) {
+            // Some modern browsers implement scheduler.postTask, but not all.
+            MainLoop.setImmediate = scheduler.postTask.bind(scheduler);
+          } else if (globalThis.setImmediate) {
+            MainLoop.setImmediate = setImmediate;
+          } else {
+            // Emulate setImmediate. (note: not a complete polyfill, we don't emulate clearImmediate() to keep code size to minimum, since not needed)
+            var setImmediates = [];
+            var emscriptenMainLoopMessageId = 'setimmediate';
+            /** @param {Event} event */
+            var MainLoop_setImmediate_messageHandler = (event) => {
+              if (event.data === emscriptenMainLoopMessageId) {
+                event.stopPropagation();
+                setImmediates.shift()();
+              }
+            };
+            addEventListener('message', MainLoop_setImmediate_messageHandler, true);
+            MainLoop.setImmediate = /** @type{function(function(): ?, ...?): number} */((func) => {
+              setImmediates.push(func);
+              if (ENVIRONMENT_IS_WORKER) {
+                // The postMessge API in a Worker, sends message to the main
+                // thread and does not support the `targetOrigin` (*) argument.
+                postMessage(emscriptenMainLoopMessageId);
+              } else {
+                postMessage(emscriptenMainLoopMessageId, '*');
+              }
+            });
+          }
+        }
+        MainLoop.scheduler = function MainLoop_scheduler_setImmediate() {
+          MainLoop.setImmediate(MainLoop.runner);
+        };
+      }
+      return 0;
+    };
+  
+    /**
+   * @param {number=} arg
+   * @param {boolean=} noSetTiming
+   */
+  var setMainLoop = (iterFunc, fps, simulateInfiniteLoop, arg, noSetTiming) => {
+      MainLoop.func = iterFunc;
+      MainLoop.arg = arg;
+  
+      var thisMainLoopId = MainLoop.currentlyRunningMainloop;
+      function checkIsRunning() {
+        if (thisMainLoopId < MainLoop.currentlyRunningMainloop) {
+          maybeExit();
+          return false;
+        }
+        return true;
+      }
+  
+      // We create the loop runner here but it is not actually running until
+      // _emscripten_set_main_loop_timing is called (which might happen at a
+      // later time).
+      MainLoop.runner = function MainLoop_runner() {
+        if (ABORT) return;
+        if (MainLoop.queue.length > 0) {
+          var start = Date.now();
+          var blocker = MainLoop.queue.shift();
+          blocker.func(blocker.arg);
+          if (MainLoop.remainingBlockers) {
+            var remaining = MainLoop.remainingBlockers;
+            var next = remaining%1 == 0 ? remaining-1 : Math.floor(remaining);
+            if (blocker.counted) {
+              MainLoop.remainingBlockers = next;
+            } else {
+              // not counted, but move the progress along a tiny bit
+              next = next + 0.5; // do not steal all the next one's progress
+              MainLoop.remainingBlockers = (8*remaining + next)/9;
+            }
+          }
+          MainLoop.updateStatus();
+  
+          // catches pause/resume main loop from blocker execution
+          if (!checkIsRunning()) return;
+  
+          setTimeout(MainLoop.runner, 0);
+          return;
+        }
+  
+        // catch pauses from non-main loop sources
+        if (!checkIsRunning()) return;
+  
+        // Implement very basic swap interval control
+        MainLoop.currentFrameNumber = MainLoop.currentFrameNumber + 1 | 0;
+        if (MainLoop.timingMode == 1 && MainLoop.timingValue > 1 && MainLoop.currentFrameNumber % MainLoop.timingValue != 0) {
+          // Not the scheduled time to render this frame - skip.
+          MainLoop.scheduler();
+          return;
+        } else if (MainLoop.timingMode == 0) {
+          MainLoop.tickStartTime = _emscripten_get_now();
+        }
+  
+        MainLoop.runIter(iterFunc);
+  
+        // catch pauses from the main loop itself
+        if (!checkIsRunning()) return;
+  
+        MainLoop.scheduler();
+      }
+  
+      if (!noSetTiming) {
+        if (fps > 0) {
+          _emscripten_set_main_loop_timing(0, 1000.0 / fps);
+        } else {
+          // Do rAF by rendering each frame (no decimating)
+          _emscripten_set_main_loop_timing(1, 1);
+        }
+  
+        MainLoop.scheduler();
+      }
+  
+      if (simulateInfiniteLoop) {
+        throw 'unwind';
+      }
+    };
+  var MainLoop = {
+  func:null,
+  scheduler:null,
+  currentlyRunningMainloop:0,
+  arg:0,
+  timingMode:0,
+  timingValue:0,
+  currentFrameNumber:0,
+  queue:[],
+  preMainLoop:[],
+  postMainLoop:[],
+  pause() {
+        if (MainLoop.scheduler) {
+          MainLoop.scheduler = null;
+          // Incrementing this signals the previous main loop that it's now become old, and it must return.
+          MainLoop.currentlyRunningMainloop++;
+          runtimeKeepalivePop();
+        }
+      },
+  resume() {
+        MainLoop.currentlyRunningMainloop++;
+        var timingMode = MainLoop.timingMode;
+        var timingValue = MainLoop.timingValue;
+        var func = MainLoop.func;
+        MainLoop.func = null;
+        // do not set timing and call scheduler, we will do it on the next lines
+        setMainLoop(func, 0, false, MainLoop.arg, true);
+        _emscripten_set_main_loop_timing(timingMode, timingValue);
+        MainLoop.scheduler();
+      },
+  updateStatus() {
+        if (Module['setStatus']) {
+          var message = Module['statusMessage'] || 'Please wait...';
+          var remaining = MainLoop.remainingBlockers ?? 0;
+          var expected = MainLoop.expectedBlockers ?? 0;
+          if (remaining) {
+            if (remaining < expected) {
+              Module['setStatus'](`${message} (${expected - remaining}/${expected})`);
+            } else {
+              Module['setStatus'](message);
+            }
+          } else {
+            Module['setStatus']('');
+          }
+        }
+      },
+  init() {
+      },
+  runIter(func) {
+        if (ABORT) return;
+        for (var pre of MainLoop.preMainLoop) {
+          if (pre() === false) {
+            return; // |return false| skips a frame
+          }
+        }
+        callUserCallback(func);
+        for (var post of MainLoop.postMainLoop) {
+          post();
+        }
+      },
+  nextRAF:0,
+  fakeRequestAnimationFrame(func) {
+        // try to keep 60fps between calls to here
+        var now = Date.now();
+        if (!MainLoop.nextRAF) {
+          MainLoop.nextRAF = now + 1000/60;
+        } else {
+          while (now + 2 >= MainLoop.nextRAF) { // fudge a little, to avoid timer jitter causing us to do lots of delay:0
+            MainLoop.nextRAF += 1000/60;
+          }
+        }
+        var delay = Math.max(MainLoop.nextRAF - now, 0);
+        setTimeout(func, delay);
+      },
+  requestAnimationFrame(func) {
+        if (globalThis.requestAnimationFrame) {
+          requestAnimationFrame(func);
+        } else {
+          MainLoop.fakeRequestAnimationFrame(func);
+        }
+      },
+  };
   var GLFW = {
   WindowFromId:(id) => {
         if (id <= 0 || !GLFW.windows) return null;
@@ -9294,6 +9394,11 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
   return BigInt(ret);
   };
   var _glfwDefaultWindowHints = () => GLFW.defaultWindowHints();
+  function _glfwDestroyWindow(winid) {
+    winid = bigintToI53Checked(winid);
+  
+  return GLFW.destroyWindow(winid);
+  }
   var _glfwGetPrimaryMonitor = () => 1n;;
   var _glfwGetTime = () => GLFW.getTime() - GLFW.initialTime;
   var _glfwGetVideoModes = function(monitor, count) {
@@ -9540,6 +9645,7 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
     };
 
 
+
   
     /**
    * @param {number} ptr
@@ -9606,11 +9712,15 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
   var _glCreateProgram = _emscripten_glCreateProgram;
   var _glCreateShader = _emscripten_glCreateShader;
   var _glCullFace = _emscripten_glCullFace;
+  var _glDeleteBuffers = _emscripten_glDeleteBuffers;
   var _glDeleteProgram = _emscripten_glDeleteProgram;
   var _glDeleteShader = _emscripten_glDeleteShader;
   var _glDeleteTextures = _emscripten_glDeleteTextures;
+  var _glDeleteVertexArrays = _emscripten_glDeleteVertexArrays;
   var _glDepthFunc = _emscripten_glDepthFunc;
+  var _glDetachShader = _emscripten_glDetachShader;
   var _glDisable = _emscripten_glDisable;
+  var _glDisableVertexAttribArray = _emscripten_glDisableVertexAttribArray;
   var _glDrawArrays = _emscripten_glDrawArrays;
   var _glEnable = _emscripten_glEnable;
   var _glEnableVertexAttribArray = _emscripten_glEnableVertexAttribArray;
@@ -9653,12 +9763,12 @@ var stringToUTF8Array = (str, heap, outIdx, maxBytesToWrite) => {
   for (let i = 0; i <= GL_POOL_TEMP_BUFFERS_SIZE; ++i) {
     miniTempWebGLIntBuffers[i] = miniTempWebGLIntBuffersStorage.subarray(0, i);
   };
+  safeSetTimeout.pending = new Map(); safeSetTimeout.nextId = 1;;
   
       Module['requestAnimationFrame'] = MainLoop.requestAnimationFrame;
       Module['pauseMainLoop'] = MainLoop.pause;
       Module['resumeMainLoop'] = MainLoop.resume;
       MainLoop.init();;
-  safeSetTimeout.pending = new Map(); safeSetTimeout.nextId = 1;;
 // End JS library code
 
 // include: postlibrary.js
@@ -9696,53 +9806,53 @@ if (Module['printErr']) err = Module['printErr'];
 // end include: postlibrary.js
 
 var ASM_CONSTS = {
-  611792: () => { const n = Module.jankCollectEvery ?? 1; return Number.isInteger(n) && n >= 1 && n <= 60 ? n : 1; },  
- 611893: ($0, $1, $2, $3, $4) => { Module.jankFrameStats = ({frames: Number($0), collections: Number($1), heap: Number($2), used: Number($3), memory: HEAPU8.buffer.byteLength, time: performance.now(), collectEvery: $4}); Module.onJankFrame?.(Module.jankFrameStats); },  
- 612128: () => { if (document.fullscreenElement) return 1; },  
- 612174: () => { return Module.canvas.width; },  
- 612206: () => { return parseInt(Module.canvas.style.width); },  
- 612254: () => { document.exitFullscreen(); },  
- 612281: () => { setTimeout(function(){ Module.requestFullscreen(false, false); }, 100); },  
- 612353: () => { if (document.fullscreenElement) return 1; },  
- 612399: () => { return Module.canvas.width; },  
- 612431: () => { return screen.width; },  
- 612456: () => { document.exitFullscreen(); },  
- 612483: ($0) => { const canvasId = UTF8ToString($0); setTimeout(function() { Module.requestFullscreen(false, true); setTimeout(function() { document.querySelector(canvasId).style.width="unset"; }, 100); }, 100); },  
- 612677: () => { return window.innerWidth; },  
- 612703: () => { return window.innerHeight; },  
- 612730: () => { if (document.fullscreenElement) return 1; },  
- 612776: () => { return Module.canvas.width; },  
- 612808: () => { return parseInt(Module.canvas.style.width); },  
- 612856: () => { if (document.fullscreenElement) return 1; },  
- 612902: () => { return Module.canvas.width; },  
- 612934: () => { return screen.width; },  
- 612959: () => { return window.innerWidth; },  
- 612985: () => { return window.innerHeight; },  
- 613012: () => { if (document.fullscreenElement) return 1; },  
- 613058: () => { return Module.canvas.width; },  
- 613090: () => { return screen.width; },  
- 613115: () => { document.exitFullscreen(); },  
- 613142: () => { if (document.fullscreenElement) return 1; },  
- 613188: () => { return Module.canvas.width; },  
- 613220: () => { return parseInt(Module.canvas.style.width); },  
- 613268: () => { document.exitFullscreen(); },  
- 613295: ($0) => { Module.canvas.style.opacity = $0; },  
- 613333: () => { return screen.width; },  
- 613358: () => { return screen.height; },  
- 613384: () => { return window.screenX; },  
- 613411: () => { return window.screenY; },  
- 613438: () => { return window.devicePixelRatio; },  
- 613474: ($0) => { navigator.clipboard.writeText(UTF8ToString($0)); },  
- 613527: ($0) => { Module.canvas.style.cursor = UTF8ToString($0); },  
- 613578: () => { Module.canvas.style.cursor = 'none'; },  
- 613615: ($0, $1, $2, $3) => { try { navigator.getGamepads()[$0].vibrationActuator.playEffect('dual-rumble', { startDelay: 0, duration: $3, weakMagnitude: $1, strongMagnitude: $2 }); } catch (e) { try { navigator.getGamepads()[$0].hapticActuators[0].pulse($2, $3); } catch (e) { } } },  
- 613871: ($0) => { Module.canvas.style.cursor = UTF8ToString($0); },  
- 613922: () => { if (document.pointerLockElement) return 1; },  
- 613969: () => { if (document.fullscreenElement) return 1; },  
- 614015: () => { return window.innerWidth; },  
- 614041: () => { return window.innerHeight; }
+  611200: ($0, $1, $2, $3) => { Module.jankFrameStats = ({frames: Number($0), collections: Number($1), heap: Number($2), used: Number($3), memory: HEAPU8.buffer.byteLength, time: performance.now()}); Module.onJankFrame?.(Module.jankFrameStats); },  
+ 611417: () => { if (document.fullscreenElement) return 1; },  
+ 611463: () => { return Module.canvas.width; },  
+ 611495: () => { return parseInt(Module.canvas.style.width); },  
+ 611543: () => { document.exitFullscreen(); },  
+ 611570: () => { setTimeout(function(){ Module.requestFullscreen(false, false); }, 100); },  
+ 611642: () => { if (document.fullscreenElement) return 1; },  
+ 611688: () => { return Module.canvas.width; },  
+ 611720: () => { return screen.width; },  
+ 611745: () => { document.exitFullscreen(); },  
+ 611772: ($0) => { const canvasId = UTF8ToString($0); setTimeout(function() { Module.requestFullscreen(false, true); setTimeout(function() { document.querySelector(canvasId).style.width="unset"; }, 100); }, 100); },  
+ 611966: () => { return window.innerWidth; },  
+ 611992: () => { return window.innerHeight; },  
+ 612019: () => { if (document.fullscreenElement) return 1; },  
+ 612065: () => { return Module.canvas.width; },  
+ 612097: () => { return parseInt(Module.canvas.style.width); },  
+ 612145: () => { if (document.fullscreenElement) return 1; },  
+ 612191: () => { return Module.canvas.width; },  
+ 612223: () => { return screen.width; },  
+ 612248: () => { return window.innerWidth; },  
+ 612274: () => { return window.innerHeight; },  
+ 612301: () => { if (document.fullscreenElement) return 1; },  
+ 612347: () => { return Module.canvas.width; },  
+ 612379: () => { return screen.width; },  
+ 612404: () => { document.exitFullscreen(); },  
+ 612431: () => { if (document.fullscreenElement) return 1; },  
+ 612477: () => { return Module.canvas.width; },  
+ 612509: () => { return parseInt(Module.canvas.style.width); },  
+ 612557: () => { document.exitFullscreen(); },  
+ 612584: ($0) => { Module.canvas.style.opacity = $0; },  
+ 612622: () => { return screen.width; },  
+ 612647: () => { return screen.height; },  
+ 612673: () => { return window.screenX; },  
+ 612700: () => { return window.screenY; },  
+ 612727: () => { return window.devicePixelRatio; },  
+ 612763: ($0) => { navigator.clipboard.writeText(UTF8ToString($0)); },  
+ 612816: ($0) => { Module.canvas.style.cursor = UTF8ToString($0); },  
+ 612867: () => { Module.canvas.style.cursor = 'none'; },  
+ 612904: ($0, $1, $2, $3) => { try { navigator.getGamepads()[$0].vibrationActuator.playEffect('dual-rumble', { startDelay: 0, duration: $3, weakMagnitude: $1, strongMagnitude: $2 }); } catch (e) { try { navigator.getGamepads()[$0].hapticActuators[0].pulse($2, $3); } catch (e) { } } },  
+ 613160: ($0) => { Module.canvas.style.cursor = UTF8ToString($0); },  
+ 613211: () => { if (document.pointerLockElement) return 1; },  
+ 613258: () => { if (document.fullscreenElement) return 1; },  
+ 613304: () => { return window.innerWidth; },  
+ 613330: () => { return window.innerHeight; }
 };
 function SetCanvasIdJs(out,outSize) { var canvasId = "#" + Module.canvas.id; stringToUTF8(canvasId, Number(out), outSize); }
+SetCanvasIdJs.sig = 'vji';
 function __asyncjs__RequestClipboardData() { return Asyncify.handleAsync(async () => { if (navigator.clipboard && window.isSecureContext) { let items = await navigator.clipboard.read(); for (const item of items) { if (item.types.includes("text/plain")) { const blob = await item.getType("text/plain"); const text = await blob.text(); window._lastClipboardString = text; } else if (item.types.find(t => t.startsWith("image/"))) { const blob = await item.getType(item.types.find(t => t.startsWith("image/"))); const bitmap = await createImageBitmap(blob); const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height; const ctx = canvas.getContext('2d'); ctx.drawImage(bitmap, 0, 0); const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height).data; window._lastImgWidth = canvas.width; window._lastImgHeight = canvas.height; window._lastImgData = imgData; } } } else console.warn("Clipboard read() requires HTTPS/Localhost"); }); }
 function GetLastPastedText() { var str = window._lastClipboardString || ""; var length = lengthBytesUTF8(str) + 1; if (length > 1) { var ptr = _malloc(length); stringToUTF8(str, ptr, length); return ptr; } return 0; }
 function GetLastPastedImage(width,height) { if (window._lastImgData) { const data = window._lastImgData; if (data.length > 0) { const ptr = _malloc(data.length); HEAPU8.set(data, ptr); if (width) setValue(width, window._lastImgWidth, 'i32'); if (height) setValue(height, window._lastImgHeight, 'i32'); window._lastImgData = null; return ptr; } } return 0; }
@@ -9752,7 +9862,9 @@ var __ZN5folly15SharedMutexImplILb0EvNSt3__26atomicENS_24SharedMutexPolicyDefaul
   __ZN5folly15SharedMutexImplILb1EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj,
   _main,
   _free,
+  _fflush,
   _malloc,
+  ___funcs_on_exit,
   _emscripten_builtin_memalign,
   ___trap,
   __emscripten_stack_alloc,
@@ -9767,7 +9879,9 @@ function assignWasmExports(wasmExports) {
   __ZN5folly15SharedMutexImplILb1EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj = Module['__ZN5folly15SharedMutexImplILb1EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj'] = wasmExports['_ZN5folly15SharedMutexImplILb1EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj'];
   _main = Module['_main'] = wasmExports['__main_argc_argv'];
   _free = wasmExports['free'];
+  _fflush = wasmExports['fflush'];
   _malloc = wasmExports['malloc'];
+  ___funcs_on_exit = wasmExports['__funcs_on_exit'];
   _emscripten_builtin_memalign = wasmExports['emscripten_builtin_memalign'];
   ___trap = wasmExports['__trap'];
   __emscripten_stack_alloc = wasmExports['_emscripten_stack_alloc'];
@@ -10387,8 +10501,6 @@ var wasmImports = {
   /** @export */
   emscripten_set_gamepaddisconnected_callback_on_thread: _emscripten_set_gamepaddisconnected_callback_on_thread,
   /** @export */
-  emscripten_set_main_loop: _emscripten_set_main_loop,
-  /** @export */
   emscripten_set_mousemove_callback_on_thread: _emscripten_set_mousemove_callback_on_thread,
   /** @export */
   emscripten_set_pointerlockchange_callback_on_thread: _emscripten_set_pointerlockchange_callback_on_thread,
@@ -10406,6 +10518,8 @@ var wasmImports = {
   emscripten_set_visibilitychange_callback_on_thread: _emscripten_set_visibilitychange_callback_on_thread,
   /** @export */
   emscripten_set_window_title: _emscripten_set_window_title,
+  /** @export */
+  emscripten_sleep: _emscripten_sleep,
   /** @export */
   environ_get: _environ_get,
   /** @export */
@@ -10457,15 +10571,23 @@ var wasmImports = {
   /** @export */
   glCullFace: _glCullFace,
   /** @export */
+  glDeleteBuffers: _glDeleteBuffers,
+  /** @export */
   glDeleteProgram: _glDeleteProgram,
   /** @export */
   glDeleteShader: _glDeleteShader,
   /** @export */
   glDeleteTextures: _glDeleteTextures,
   /** @export */
+  glDeleteVertexArrays: _glDeleteVertexArrays,
+  /** @export */
   glDepthFunc: _glDepthFunc,
   /** @export */
+  glDetachShader: _glDetachShader,
+  /** @export */
   glDisable: _glDisable,
+  /** @export */
+  glDisableVertexAttribArray: _glDisableVertexAttribArray,
   /** @export */
   glDrawArrays: _glDrawArrays,
   /** @export */
@@ -10526,6 +10648,8 @@ var wasmImports = {
   glfwCreateWindow: _glfwCreateWindow,
   /** @export */
   glfwDefaultWindowHints: _glfwDefaultWindowHints,
+  /** @export */
+  glfwDestroyWindow: _glfwDestroyWindow,
   /** @export */
   glfwGetPrimaryMonitor: _glfwGetPrimaryMonitor,
   /** @export */
@@ -10588,6 +10712,7 @@ function applySignatureConversions(wasmExports) {
   wasmExports = {};
   wasmExports['__main_argc_argv'] = makeWrapper___PP(origExports['__main_argc_argv']);
   wasmExports['free'] = makeWrapper__p(origExports['free']);
+  wasmExports['fflush'] = makeWrapper__p(origExports['fflush']);
   wasmExports['malloc'] = makeWrapper_pp(origExports['malloc']);
   wasmExports['emscripten_builtin_memalign'] = makeWrapper_ppp(origExports['emscripten_builtin_memalign']);
   wasmExports['_emscripten_stack_alloc'] = makeWrapper_pp(origExports['_emscripten_stack_alloc']);
@@ -10599,7 +10724,7 @@ function applySignatureConversions(wasmExports) {
 // include: postamble.js
 // === Auto-generated postamble setup entry stuff ===
 
-function callMain(args = []) {
+async function callMain(args = []) {
 
   var entryFunction = _main;
 
@@ -10618,6 +10743,10 @@ function callMain(args = []) {
 
     var ret = entryFunction(argc, BigInt(argv));
 
+    // The current spec of JSPI returns a promise only if the function suspends
+    // and a plain value otherwise. This will likely change:
+    // https://github.com/WebAssembly/js-promise-integration/issues/11
+    ret = await ret;
     // if we're not running an evented main loop, it's time to exit
     exitJS(ret, /* implicit = */ true);
     return ret;
@@ -10652,7 +10781,7 @@ async function run(args = programArgs) {
   Module['onRuntimeInitialized']?.();
 
   var noInitialRun = Module['noInitialRun'] || false;
-  if (!noInitialRun) callMain(args);
+  if (!noInitialRun) await callMain(args);
 
   postRun();
 }

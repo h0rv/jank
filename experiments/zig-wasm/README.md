@@ -503,7 +503,143 @@ assertions. These results do not validate general filesystem/TTY behavior,
 Wasm GC root visibility, tagged-reference GC safety, or successful spike
 execution. The earlier collector-suite limitations remain unresolved.
 
+### Applying target configuration to AOT and installing the target SDK
+
+This AI-assisted follow-up uses `devin/1794875064-apply-target-config`, based on
+the wasm64 runtime-archive branch above. It addresses configuration/driver/SDK
+selection, not the unresolved Wasm startup error. The older target-config and
+cross-install limitations above describe earlier revisions.
+
+**Source changes:** `target_json.cmake` accepts `jank_target_triple`, otherwise
+queries the configured compiler with tokenized `CMAKE_CXX_FLAGS`, and fails
+configuration on an unsuccessful or empty query. The unset link-directory
+property is no longer serialized as `-L...-NOTFOUND`. In cross mode only, flag
+serialization filters the discovered host LLVM/Clang include/library/install
+roots and the configured host resource directory. Other target/source paths
+are preserved; this is not a runtime-only CMake redesign.
+
+External AOT object compilation and executable linking now use the JSON
+`clang_bin` and `--target=<triple>`. A nonempty missing compiler path is an error,
+not a request to fall back to the host. Empty compiler paths retain host
+discovery. Cross configs (a nonempty triple different from the host default)
+omit host executable/resource include/library paths and rpaths, use SDK-relative
+`include`/`lib` directories, and resolve the forced prelude through target
+include paths. Native paths retain their previous behavior. Host JIT/PCH and
+analysis must stay native: for a cross config they use the default host config
+and `find_clang()`, not the target compiler or target header flags.
+
+Emscripten **7.0.0** was probed directly:
+
+```text
+em++ -sMEMORY64=1 -print-target-triple
+wasm64-unknown-emscripten
+```
+
+`--target=wasm64-unknown-emscripten -sMEMORY64=1` is accepted too: driver `-###`
+output used that `-cc1 -triple`, and a compiled probe had `Arch: wasm64` and
+`AddressSize: 64bit`. Neither an em++ exception nor a hard-coded script triple
+override was necessary. The experiment helper's existing memory64 flags suffice.
+
+Cross installation now stages only headers, `libjank-static-runtime.a`, and
+`target_config.json` under `lib/jank/0.1/`. It does not install the dummy phase-2
+library, a host executable, or a dynamic runtime. The bundled target zstd's
+independent install rules are excluded from this SDK installation; its objects
+remain merged into the runtime. Native install rules are unchanged. Default
+JSON loading still tries beside the executable first (development builds), then
+`../lib/target_config.json` (the existing native install location).
+
+**Reproduction:** bootstrap the documented container, pinned LLVM 23.1.6 and
+Emscripten 7.0.0 SDK first. No system packages were installed on the host, and
+submodule pins were unchanged. From this experiment directory:
+
+```sh
+python3 scripts/check-target-config.py
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh host
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh deps
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh configure
+python3 scripts/check-target-config.py --generated artifacts/build-wasm64/target_config.json
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh build
+docker exec --user 1000:1000 jank-host-build cmake --install artifacts/build-wasm64 \
+  --prefix /home/ubuntu/repos/jank/experiments/zig-wasm/.tools/wasm64-install
+docker exec --user 1000:1000 jank-host-build python3 scripts/check-target-aot.py
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh install
+docker exec --user 1000:1000 jank-host-build .tools/host-install/bin/jank print-binary-version
+```
+
+The configure-only regression covers explicit/query/failed/empty triples,
+absent/present link directories, cross filtering, and preservation of native
+flags (7 tests). `--generated` prints the complete JSON and asserts the wasm64
+triple, absence of `NOTFOUND`, `/usr/lib/llvm-*` and host-resource paths in both
+flag fields. The AOT regression creates a tiny jank module, a recording em++
+wrapper and a temporary config beside the staged config. It logs the **actual**
+forwarded compiler command, checks target selection and host-path exclusion,
+inspects the object with the SDK's `llvm-readobj`, exercises missing/failing
+compilers and empty-path fallback, then links/runs a native default-config AOT
+executable. Each attempt uses a fresh target directory.
+
+**Configure/compile/archive/install results:**
+
+| Check | Result and scope |
+| --- | --- |
+| Configure-only regression | 7 tests, OK, 0.141 s |
+| wasm64 configure | Exit 0; 75 s initially including dependency setup, 3 s final cached configure |
+| Generated JSON | `triple=wasm64-unknown-emscripten`, `clang_bin=.../upstream/emscripten/em++`; all path/sentinel assertions passed |
+| Host build | Exit 0; 198 s successful retry, 75 s final incremental build after the prelude fix |
+| Target archive | Exit 0; 229 build edges, 96 s initial archive build; 40 edges, 34 s final incremental refresh |
+| Target SDK install | Exit 0; 2457 files, all under `lib/jank/0.1/`; archive 23,883,114 bytes |
+| Cross AOT module | Exit 0 using the staged config's recording wrapper, `--target=wasm64-unknown-emscripten` and `-sMEMORY64=1`; no host LLVM/resource paths in recorded arguments |
+| Target object inspection | `Format: WASM`, `Arch: wasm64`, `AddressSize: 64bit` |
+| Staged-header-only compilation | Exit 0 after removing **all** source-tree `-I` arguments from the recorded command; object is wasm64 |
+| Missing/failing compiler | Both exit 1 with the expected diagnostics; no host fallback |
+| Empty compiler/triple | Native object compile exits 0 using host discovery |
+| Native installed config discovery | Installed `jank print-binary-version` exits 0 without an explicit config or a JSON beside `bin/jank` |
+
+Full generated JSON remains at `artifacts/build-wasm64/target_config.json` and
+`.tools/wasm64-install/lib/jank/0.1/target_config.json`. Logs are
+`artifacts/logs/{host-*,wasm64-*,target-config-aot.log}`. The full SDK file list
+is `artifacts/logs/wasm64-installed-files.txt`; representative entries are:
+
+```text
+lib/jank/0.1/include/jank/prelude.hpp
+lib/jank/0.1/lib/libjank-static-runtime.a
+lib/jank/0.1/target_config.json
+```
+
+**Link/run results:** native default-config AOT links and executes, printing
+`target config native AOT passed`. The final native suite reports:
+
+```text
+tested 868 jank files with 9 skips and 0 failures
+[doctest] test cases:  129 |  129 passed | 0 failed | 0 skipped
+[doctest] assertions: 2029 | 2029 passed | 0 failed |
+[doctest] Status: SUCCESS!
+```
+
+This round did **not** link or execute a complete Wasm jank application, rerun
+the Zig spike, or retest collector safety. The historical startup error remains
+unresolved. The C++ changes compile in the host; target AOT object production is
+verified, not successful Wasm application execution. Zig was not invoked or
+upgraded; its experiment pin remains 0.17.1.
+
+**Failures and remaining limitations:** the first host build caught an ambiguous
+`immutable_string != std::string` comparison; explicit conversion fixed it.
+The recording check then caught a host-resource prelude path despite clean
+JSON; cross AOT now uses `-include jank/prelude.hpp`. The test harness initially
+looked one directory too high for `llvm-readobj`; its path was corrected.
+Reusing the cross output directory exposed a separate existing loader issue:
+it tried to load the previously emitted Wasm object into the host and reported
+`Failed to find symbol: 'jank_load_target_config_smoke'`. This round does not
+redesign module caching/loading; use fresh target directories for these probes.
+The cache directory's version prefix still names the host architecture.
+Generated configs retain absolute checkout and target-SDK paths, so a fully
+relocatable SDK is not claimed. macOS/Windows cross-host behavior is untested.
+
 ### wasm32 runtime archive and spike attempt
+
+This section records the comparison before target-config application was merged.
+Its target-config/path-leak limitations are historical; the runtime pointer-width
+blockers below are not fixed by applying the target triple.
 
 This AI-assisted comparison starts from PR #5 head `2ea3f2828`. **Whether the
 `reader_opts` error is wasm64-specific remains undetermined:** wasm32 fails
@@ -929,6 +1065,50 @@ of absence of all dangling internal storage.
 No core startup, generated modules, JIT, browser, concurrency, arbitrary Wasm
 address ranges, or complete spike correctness is tested here. No runtime source
 change or supported production rooting strategy is claimed.
+
+### Main merge and target-config regression checks
+
+The AI-assisted merge of main into `devin/1794875064-apply-target-config`
+preserves both historical sections above, the width-parameterized Wasm helper,
+and the target-config changes. The only textual conflict was in this README.
+`check-target-config.py` now tests both widths' host-path filtering and an
+unflagged wasm32 triple query. Its generated-config check accepts `WASM_BITS=32`
+(default 64), matching the build helper:
+
+```sh
+WASM_BITS=32 python3 scripts/check-target-config.py \
+  --generated artifacts/build-wasm32/target_config.json
+```
+
+Post-merge Ubuntu 24.04 results: host configure/build exited 0 in 1/128 s;
+native `jank-test` exited 0 in 12 s:
+
+```text
+tested 870 jank files with 9 skips and 0 failures
+[doctest] test cases:  129 |  129 passed | 0 failed | 0 skipped
+[doctest] assertions: 2031 | 2031 passed | 0 failed |
+[doctest] Status: SUCCESS!
+```
+
+Configure-only regression: **8 tests, OK**. Wasm64 configure exited 0 in 3 s;
+wasm32 dependencies/configure exited 0 in 2/59 s. Both generated JSON checks
+passed triple, `NOTFOUND`, host LLVM and host-resource assertions. Wasm32 records
+`wasm32-unknown-emscripten` without MEMORY64; wasm64 records
+`wasm64-unknown-emscripten` with MEMORY64. Neither needs a triple override.
+
+The wasm64 runtime archive rebuilt successfully (58 s), and SDK installation
+returned 0 before running `check-target-aot.py`. Its recording compiler verified
+the configured `em++`, `--target=wasm64-unknown-emscripten` and no host
+LLVM/resource paths; inspection reported `Format: WASM`, `Arch: wasm64`,
+`AddressSize: 64bit`. Missing/failing compiler negative controls exited 1 as
+expected; native default AOT compile/run and empty compiler/triple fallback
+exited 0. Full commands/results are in ignored
+`artifacts/logs/merge-target-aot.log` and `merge-wasm64-install.log`.
+
+No wasm32 archive/AOT/link/run was attempted in this merge check: successful
+configuration does not fix the previously documented runtime pointer-width
+blockers. No wasm64 application link/run or GC-root matrix was repeated here;
+the runtime correctness limitations above remain.
 
 ### wasm64 top-level GC safepoint spike experiment
 

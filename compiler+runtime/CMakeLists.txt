@@ -1204,8 +1204,12 @@ include(cmake/target_json.cmake)
 # ---- Compilation target ----
 
 # ---- Install rules ----
-if(NOT CMAKE_SKIP_INSTALL_RULES AND jank_enable_phase_2 AND NOT jank_cross_compile)
-  include(cmake/install.cmake)
+if(NOT CMAKE_SKIP_INSTALL_RULES AND jank_enable_phase_2)
+  if(jank_cross_compile)
+    include(cmake/install_target.cmake)
+  else()
+    include(cmake/install.cmake)
+  endif()
 endif()
 # ---- Install rules ----
 

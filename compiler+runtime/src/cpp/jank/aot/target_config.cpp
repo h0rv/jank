@@ -22,7 +22,12 @@ namespace jank::aot
     std::string actual_path{ path };
     if(path.empty())
     {
-      actual_path = std::filesystem::path{ util::process_dir() } / "target_config.json";
+      auto const process_dir{ std::filesystem::path{ util::process_dir() } };
+      actual_path = process_dir / "target_config.json";
+      if(!std::filesystem::exists(actual_path))
+      {
+        actual_path = process_dir / "../lib/target_config.json";
+      }
     }
 
     if(!std::filesystem::exists(actual_path))

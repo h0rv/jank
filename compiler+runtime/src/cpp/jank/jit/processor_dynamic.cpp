@@ -18,6 +18,7 @@
 #include <llvm/Object/SymbolSize.h>
 #include <llvm/IRReader/IRReader.h>
 #include <llvm/Support/Signals.h>
+#include <llvm/TargetParser/Host.h>
 
 #include <CppInterOp/Compatibility.h>
 #include <CppInterOp/CppInterOp.h>
@@ -49,6 +50,17 @@
 
 namespace jank::jit
 {
+  static aot::target_config load_jit_config()
+  {
+    auto config{ aot::load_target_config(util::cli::opts.target_config).expect_ok() };
+    if(!config.triple.empty()
+       && config.triple != jtl::immutable_string{ llvm::sys::getDefaultTargetTriple() })
+    {
+      config = aot::load_target_config("").expect_ok();
+    }
+    return config;
+  }
+
   static jtl::immutable_string shared_lib_name(jtl::immutable_string const &lib)
 #if defined(__APPLE__)
   {
@@ -99,7 +111,7 @@ namespace jank::jit
 
   native_vector<std::filesystem::path> processor::build_library_dirs()
   {
-    auto const target_config{ aot::load_target_config(util::cli::opts.target_config).expect_ok() };
+    auto const target_config{ load_jit_config() };
     native_vector<std::filesystem::path> library_dirs;
 
     for(auto const &library_dir : util::cli::opts.library_dirs)
@@ -144,7 +156,7 @@ namespace jank::jit
   {
     profile::timer const timer{ "jit ctor" };
 
-    auto const target_config{ aot::load_target_config(util::cli::opts.target_config).expect_ok() };
+    auto const target_config{ load_jit_config() };
     library_dirs = build_library_dirs();
 
     /* When we AOT compile the jank compiler/runtime, we keep track of the compiler

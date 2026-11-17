@@ -4,6 +4,8 @@
 
 #include <unistd.h>
 
+#include <llvm/TargetParser/Host.h>
+
 #include <jtl/result.hpp>
 #include <jtl/string_builder.hpp>
 
@@ -172,41 +174,54 @@ int main(int argc, const char** argv)
 
     std::vector<char const *> compiler_args{};
 
-    auto const clang_path_str{ target_config.clang_bin };
-    auto const clang_dir{ std::filesystem::path{ clang_path_str.c_str() }.parent_path() };
-    compiler_args.emplace_back(strdup("-I"));
-    compiler_args.emplace_back(strdup((clang_dir / "../include").string().c_str()));
-#ifndef __MINGW64__
-    compiler_args.emplace_back(
-      strdup(util::format("-Wl,-rpath,{}", (clang_dir / "../lib").string()).c_str()));
-#endif
-
-    // TODO: We should actually find the jank libs/resources w.r.t. the target
-    // config file, since we may be cross-compiling from a host jank compiler to
-    // some other target.
-
-    std::filesystem::path const jank_path{ util::process_dir().c_str() };
-    std::string const jank_path_str(jank_path.string());
-    compiler_args.emplace_back(strdup("-L"));
-    compiler_args.emplace_back(strdup(jank_path_str.c_str()));
-
-    std::filesystem::path const jank_resource_dir{ util::resource_dir().c_str() };
-    compiler_args.emplace_back(strdup("-I"));
-    compiler_args.emplace_back(
-      strdup(util::format("{}/include", jank_resource_dir.string()).c_str()));
-    compiler_args.emplace_back(strdup("-L"));
-    compiler_args.emplace_back(strdup(util::format("{}/lib", jank_resource_dir.string()).c_str()));
-#ifndef __MINGW64__
-    compiler_args.emplace_back(
-      strdup(util::format("-Wl,-rpath,{}/lib", jank_resource_dir.string()).c_str()));
-#endif
-
-    if constexpr(jtl::current_platform == jtl::platform::macos_like)
+    auto const cross_config{ !target_config.triple.empty()
+                             && target_config.triple
+                               != jtl::immutable_string{ llvm::sys::getDefaultTargetTriple() } };
+    if(!target_config.triple.empty())
     {
-      /* Homebrew. */
-      compiler_args.push_back(strdup("-I/opt/homebrew/include"));
-      /* Macports. */
-      compiler_args.push_back(strdup("-I/opt/local/include"));
+      compiler_args.emplace_back(strdup(util::format("--target={}", target_config.triple).c_str()));
+    }
+
+    if(!cross_config)
+    {
+      auto const clang_path_str{ target_config.clang_bin };
+      auto const clang_dir{ std::filesystem::path{ clang_path_str.c_str() }.parent_path() };
+      compiler_args.emplace_back(strdup("-I"));
+      compiler_args.emplace_back(strdup((clang_dir / "../include").string().c_str()));
+#ifndef __MINGW64__
+      compiler_args.emplace_back(
+        strdup(util::format("-Wl,-rpath,{}", (clang_dir / "../lib").string()).c_str()));
+#endif
+
+      std::filesystem::path const jank_path{ util::process_dir().c_str() };
+      std::string const jank_path_str(jank_path.string());
+      compiler_args.emplace_back(strdup("-L"));
+      compiler_args.emplace_back(strdup(jank_path_str.c_str()));
+
+      std::filesystem::path const jank_resource_dir{ util::resource_dir().c_str() };
+      compiler_args.emplace_back(strdup("-I"));
+      compiler_args.emplace_back(
+        strdup(util::format("{}/include", jank_resource_dir.string()).c_str()));
+      compiler_args.emplace_back(strdup("-L"));
+      compiler_args.emplace_back(strdup(util::format("{}/lib", jank_resource_dir.string()).c_str()));
+#ifndef __MINGW64__
+      compiler_args.emplace_back(
+        strdup(util::format("-Wl,-rpath,{}/lib", jank_resource_dir.string()).c_str()));
+#endif
+
+      if constexpr(jtl::current_platform == jtl::platform::macos_like)
+      {
+        /* Homebrew. */
+        compiler_args.push_back(strdup("-I/opt/homebrew/include"));
+        /* Macports. */
+        compiler_args.push_back(strdup("-I/opt/local/include"));
+      }
+    }
+    else if(!util::cli::opts.target_config.empty())
+    {
+      auto const sdk_dir{ std::filesystem::absolute(util::cli::opts.target_config.c_str()).parent_path() };
+      compiler_args.emplace_back(strdup(util::format("-I{}/include", sdk_dir.string()).c_str()));
+      compiler_args.emplace_back(strdup(util::format("-L{}/lib", sdk_dir.string()).c_str()));
     }
 
     std::stringstream flags{ target_config.jit_flags };
@@ -510,7 +525,8 @@ int main(int argc, const char** argv)
 
     //util::println("compilation command: {} ", compiler_args);
 
-    auto const res{ util::invoke_clang(compiler_args) };
+    auto const target_config{ load_target_config(util::cli::opts.target_config).expect_ok() };
+    auto const res{ util::invoke_clang(compiler_args, target_config.clang_bin) };
     if(res.is_err())
     {
       return res.expect_err();
@@ -549,7 +565,12 @@ int main(int argc, const char** argv)
     }
 
     compiler_args.push_back("-include");
-    auto prelude_path{ util::prelude_hpp_path() };
+    auto const target_config{ load_target_config(util::cli::opts.target_config).expect_ok() };
+    auto const cross_config{ !target_config.triple.empty()
+                             && target_config.triple
+                               != jtl::immutable_string{ llvm::sys::getDefaultTargetTriple() } };
+    auto prelude_path{ cross_config ? jtl::result<jtl::immutable_string, error_ref>{ "jank/prelude.hpp" }
+                                   : util::prelude_hpp_path() };
     if(prelude_path.is_err())
     {
       return prelude_path.expect_err();
@@ -574,7 +595,7 @@ int main(int argc, const char** argv)
 
     //util::println("compilation command: {} ", compiler_args);
 
-    auto const res{ util::invoke_clang(compiler_args) };
+    auto const res{ util::invoke_clang(compiler_args, target_config.clang_bin) };
     if(res.is_err())
     {
       return res.expect_err();

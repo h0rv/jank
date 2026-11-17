@@ -40,7 +40,7 @@ cd jank-wasm/experiments/zig-wasm
 ./jank-build serve my-app</pre>
   <p>Use the <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/zig-wasm/examples/hello-cljc">example’s platform layer</a> for browser DOM output versus native/Node stdout, with <code>#?(:wasm … :native …)</code>. Generic stdout is displayed by the generated page too. Outputs are under <code>artifacts/app/&lt;name&gt;/wasm/</code> and <code>native/</code>.</p>
   <h2>Know the limits</h2>
-  <p>This AI-assisted research fork is not general jank Wasm support. The Emscripten pipeline uses static roots and a private Binaryen transform; ordinary startup and general exception/GC ownership are not solved. No runtime eval, browser REPL, general browser API layer or thread support is supplied.</p>
+  <p>This AI-assisted research fork is not general jank Wasm support. The Emscripten pipeline uses static roots and a private Binaryen transform; ordinary startup and general GC rooting are not solved. The runtime roots thrown jank objects and errors, but not arbitrary native exceptions with GC-managed fields. No runtime eval, browser REPL, general browser API layer or thread support is supplied.</p>
   <p><a href="https://github.com/h0rv/jank-wasm">Fork source ↗</a> · <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Full build requirements, evidence and limitations ↗</a></p>
   <footer>AI-assisted research and site. Kept in this fork, not submitted upstream.</footer>
 </main>

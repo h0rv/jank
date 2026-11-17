@@ -19,7 +19,7 @@
   <p class="hint">Requires memory64 and Wasm exceptions. Chrome works; Safari likely will not. <a href="try.html">Requirements and build instructions →</a></p>
   <section class="about"><h2>A research fork, not a portability promise.</h2>
     <p>This is an AI-assisted research fork of <a href="https://github.com/jank-lang/jank">jank</a>, exploring an experimental wasm64 / Emscripten AOT pipeline. It is <strong>not general jank Wasm support</strong> and this is <strong>not a browser REPL</strong>: the program was compiled before deployment.</p>
-    <p>The demo uses explicit static roots and a private Binaryen spill transform. Ordinary unrooted startup still fails; general GC safety and exception-storage ownership remain unresolved.</p>
+    <p>The demo uses explicit static roots and a private Binaryen spill transform. Ordinary unrooted startup still fails and general GC safety is unproven. The runtime now roots thrown jank objects and errors; arbitrary native exceptions with GC-managed fields are not covered.</p>
     <p><a href="https://github.com/h0rv/jank-wasm">Fork source ↗</a> · <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Experiment evidence and limitations ↗</a></p>
   </section>
   <footer>AI-assisted research and site. Kept in this fork, not submitted upstream.</footer>

@@ -33,6 +33,12 @@ a-c { color: #928374; font-style: italic; }
 details { border-top: 1px solid var(--line); }
 summary { cursor: pointer; padding: 6px 14px; color: var(--muted); font-size: .8rem; }
 #stdout { color: var(--muted); }
+.game-frame { display: block; width: 100%; max-width: 610px; height: auto; aspect-ratio: 610 / 780; border: 0; }
+.game-box { position: relative; max-width: 610px; }
+.game-canvas { display: block; width: 100%; height: auto; }
+.game-message { position: absolute; inset: 0; display: grid; place-content: center; padding: 24px; background: var(--code); text-align: center; }
+.game-message[hidden] { display: none; }
+.game-status { margin: 6px 0; color: var(--muted); font-size: .8rem; }
 .note { color: var(--muted); font-size: .9rem; }
 table { width: 100%; border-collapse: collapse; font-size: .95rem; }
 th, td { text-align: left; vertical-align: top; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); }

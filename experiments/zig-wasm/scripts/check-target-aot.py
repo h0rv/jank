@@ -5,12 +5,12 @@ import os
 import pathlib
 import shlex
 import subprocess
+import tempfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 HOST = ROOT / "artifacts/build-host/jank"
 SDK = ROOT / ".tools/wasm64-install/lib/jank/0.1"
-OUT = ROOT / "artifacts/target-config-aot"
-OUT.mkdir(exist_ok=True)
+OUT = pathlib.Path(tempfile.mkdtemp(prefix="target-config-aot-", dir=ROOT / "artifacts"))
 (OUT / "src").mkdir(exist_ok=True)
 (OUT / "src/target_config_smoke.jank").write_text(
     '(ns target-config-smoke)\n(defn -main [] (println "target config native AOT passed"))\n'
@@ -60,17 +60,19 @@ try:
     assert objects
     for obj in objects:
         print(run("wasm-file", ["file", obj]), end="")
-        headers = run("wasm-headers", [driver.parents[2] / "bin/llvm-readobj", "--file-headers", obj])
+        headers = run("wasm-headers", [driver.parents[1] / "bin/llvm-readobj", "--file-headers", obj])
         assert "Arch: wasm64" in headers
         print(headers, end="")
 
     config["clang_bin"] = str(OUT / "missing-compiler")
     recording_config.write_text(json.dumps(config))
+    cross_args[cross_args.index("--target-dir") + 1] = OUT / "missing"
     output = run("missing-compiler", cross_args, success=False)
     assert "Target compiler does not exist" in output
     wrapper.write_text("#!/bin/sh\necho deliberate-target-driver-failure >&2\nexit 7\n")
     config["clang_bin"] = str(wrapper)
     recording_config.write_text(json.dumps(config))
+    cross_args[cross_args.index("--target-dir") + 1] = OUT / "failing"
     output = run("failing-compiler", cross_args, success=False)
     assert "deliberate-target-driver-failure" in output
 

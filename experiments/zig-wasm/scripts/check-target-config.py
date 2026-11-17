@@ -3,6 +3,7 @@
 import json
 import pathlib
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -82,4 +83,14 @@ set(jank_linker_flags -L/host/llvm/lib -L /host/libraries -L/target/lib)
 
 if __name__ == "__main__":
     (ROOT / "artifacts").mkdir(exist_ok=True)
-    unittest.main()
+    if len(sys.argv) == 3 and sys.argv[1] == "--generated":
+        config = json.loads(pathlib.Path(sys.argv[2]).read_text())
+        assert config["triple"] == "wasm64-unknown-emscripten"
+        for name in ("jit_flags", "aot_flags"):
+            assert "NOTFOUND" not in config[name]
+            assert "/usr/lib/llvm-" not in config[name]
+            assert "artifacts/host-resources" not in config[name]
+        print(json.dumps(config, indent=2))
+        print("wasm64 JSON: triple, NOTFOUND, host LLVM and resource checks passed")
+    else:
+        unittest.main()

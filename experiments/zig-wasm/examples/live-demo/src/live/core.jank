@@ -1,0 +1,19 @@
+;; AI-assisted interactive demo: the page hands each edit to `frame`.
+(ns live.core
+  (:require [live.page :as page]))
+
+(defn summarize [text]
+  (let [xs (vec (keep parse-long (re-seq #"-?\d+" text)))]
+    {:count (count xs)
+     :sum (reduce + 0 xs)
+     :weighted (reduce + 0 (map-indexed (fn [i x] (* (inc i) x)) xs))
+     :sorted (vec (sort xs))
+     :frequencies (frequencies xs)}))
+
+(defn frame []
+  (when-let [text (page/take-input)]
+    (page/show (pr-str (summarize text)))))
+
+(defn -main [& _]
+  (println (pr-str (summarize "3 1 4 1 5")))
+  (println "live: ready"))

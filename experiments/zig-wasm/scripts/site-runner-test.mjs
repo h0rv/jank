@@ -1,13 +1,14 @@
-// AI-assisted tests for the static AOT demo's completion and error states.
+// AI-assisted tests for the live demo runner's input, result and error states.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
 
 const source = readFileSync(new URL('../site/runner.js', import.meta.url), 'utf8');
-function runner({ output = '', wasm = true } = {}) {
-  const elements = Object.fromEntries(['stdout', 'status', 'app'].map(id => [id, { textContent: '' }]));
-  elements.app.textContent = output;
+function runner({ wasm = true } = {}) {
+  const elements = Object.fromEntries(['input', 'result', 'status', 'stats', 'stdout'].map(id =>
+    [id, { textContent: '', value: '1 2 3', disabled: true,
+      addEventListener(name, callback) { this[`on${name}`] = callback; } }]));
   const listeners = {};
   const scripts = [];
   const document = {
@@ -16,27 +17,33 @@ function runner({ output = '', wasm = true } = {}) {
     createElement: () => ({}),
     body: { appendChild: script => scripts.push(script) }
   };
-  const context = vm.createContext({ document, WebAssembly: wasm ? {} : undefined,
+  const created = [];
+  const context = vm.createContext({ document, performance: { now: () => 0 },
+    WebAssembly: wasm ? {} : undefined,
+    createLive: options => { const instance = {}; created.push({ options, instance });
+      return Promise.resolve(instance); },
     window: { addEventListener: (name, callback) => { listeners[name] = callback; } } });
   vm.runInContext(source, context);
-  return { context, document, elements, listeners, scripts };
+  return { document, elements, listeners, scripts, created };
 }
 
-test('requires successful exit and all live example output', () => {
-  const page = runner({ output: 'platform: browser\nweighted buffer: 30\nhello: checks passed\n' });
-  assert.equal(page.scripts[0].src, 'hello.js');
-  assert.equal(page.context.Module.arguments[0], 'static-roots');
-  page.context.Module.onExit(0);
+test('starts the module, sends input and shows its result', async () => {
+  const page = runner();
+  assert.equal(page.scripts[0].src, 'live.js');
+  page.scripts[0].onload();
+  await new Promise(resolve => setImmediate(resolve));
+  const { options, instance } = page.created[0];
+  assert.equal(options.arguments[0], 'static-roots');
+  assert.equal(page.elements.input.disabled, false);
+  assert.equal(instance.liveInput, '1 2 3');
+  page.elements.input.value = '4 5';
+  page.elements.input.oninput();
+  assert.equal(instance.liveInput, '4 5');
+  options.onLiveResult('{:count 2}');
+  assert.equal(page.elements.result.textContent, '{:count 2}');
   assert.equal(page.document.documentElement.dataset.status, 'pass');
-});
-
-test('empty or incomplete output and nonzero exit fail', () => {
-  for (const [output, exit] of [['', 0], ['hello: checks passed', 0],
-    ['platform: browser\nweighted buffer: 30\nhello: checks passed', 1]]) {
-    const page = runner({ output });
-    page.context.Module.onExit(exit);
-    assert.equal(page.document.documentElement.dataset.status, 'fail');
-  }
+  options.onJankFrame({ frames: 9, collections: 2, used: 1048576, heap: 2097152 });
+  assert.match(page.elements.stats.textContent, /frame 9, 2 garbage collections/);
 });
 
 test('missing WebAssembly and load errors give visible diagnostics', () => {
@@ -46,11 +53,11 @@ test('missing WebAssembly and load errors give visible diagnostics', () => {
   assert.equal(missing.document.documentElement.dataset.status, 'fail');
   const page = runner();
   page.scripts[0].onerror();
-  assert.match(page.elements.stdout.textContent, /Could not load hello.js/);
+  assert.match(page.elements.stdout.textContent, /Could not load live.js/);
 });
 
 test('abort, runtime errors and rejected promises fail visibly', () => {
-  for (const trigger of [page => page.context.Module.onAbort('abort'),
+  for (const trigger of [page => { page.scripts[0].onload(); page.created[0].options.onAbort('abort'); },
     page => page.listeners.error({ message: 'runtime error' }),
     page => page.listeners.unhandledrejection({ reason: 'rejection' })]) {
     const page = runner();

@@ -1,0 +1,7 @@
+{
+  "name": "live",
+  "main": "live.core",
+  "frame": "live.core/frame",
+  "expect": ["live: ready"],
+  "wasm": {"link_flags": ["-sMODULARIZE=1", "-sEXPORT_NAME=createLive"]}
+}

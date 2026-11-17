@@ -54,10 +54,16 @@ The GC experiment pins Emscripten 7.0.0 and Boehm commit `91f30f37b0457566e9823b
 ### Fork Pages site
 
 The AI-assisted research site at <http://horv.co/jank-wasm/> runs the pure-jank
-`hello-cljc` AOT example live, not a browser REPL. From this directory, run
+`examples/live-demo` AOT module live, not a browser REPL. It is a `frame`
+project (see below) built with `-sMODULARIZE=1`: the page stores each edit of
+its input in `Module.liveInput`, the next frame's jank `summarize` reads it and
+returns the result through `Module.onLiveResult`, and `Module.jankFrameStats`
+supplies the frame and collection counts shown beside it. The site's Build link
+points at the [one-command section](#one-command-native--wasm) below rather
+than repeating it. From this directory, run
 `bash scripts/build-pages.sh` to build the example and assemble the static site
 in ignored `artifacts/pages/jank-wasm/`. It includes the site sources from
-`site/`, `hello.js`, `hello.wasm` and `.nojekyll`, but no unspilled diagnostic
+`site/`, `live.js`, `live.wasm` and `.nojekyll`, but no unspilled diagnostic
 binary or CNAME. Code blocks marked `data-lang` are highlighted at build time by
 `tools/site-highlight`, a small Rust tool using arborium 2.18.2, so the host
 also needs Cargo; the page loads no highlighting script. Internal links/assets are relative for the `/jank-wasm/` prefix.

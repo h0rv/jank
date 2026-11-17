@@ -50,6 +50,17 @@ class TargetConfigTests(unittest.TestCase):
     def test_empty_query(self):
         self.configure("exit 0", success=False)
 
+    def test_missing_link_directories(self):
+        config = self.configure("echo native-target")
+        self.assertNotIn("NOTFOUND", config["aot_flags"])
+
+    def test_link_directories_preserved(self):
+        config = self.configure(
+            "echo native-target",
+            setup='set_property(TARGET jank_common_lib PROPERTY LINK_DIRECTORIES /target/one /target/two)',
+        )
+        self.assertEqual(config["aot_flags"], "-L/target/one -L/target/two")
+
 
 if __name__ == "__main__":
     (ROOT / "artifacts").mkdir(exist_ok=True)

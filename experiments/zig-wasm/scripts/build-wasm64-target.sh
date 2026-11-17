@@ -121,6 +121,9 @@ PY
     grep -Fxq 'jank -> Zig: scalar and wide result checks passed' artifacts/logs/wasm64-spike-run.log
     grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' artifacts/logs/wasm64-spike-run.log
     ;;
+  gc-roots)
+    run gc-roots python3 "$ROOT/wasm-probe/gc-roots-matrix.py" "$ROOT"
+    ;;
   startup-roots)
     run startup-roots-compile python3 - "$ROOT" <<'PY'
 import json, pathlib, shlex, subprocess, sys
@@ -238,5 +241,5 @@ PY
     grep -Fxq 'jank -> Zig: scalar and wide result checks passed' artifacts/logs/wasm64-startup-trace-wasm64-default.log
     grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' artifacts/logs/wasm64-startup-trace-wasm64-default.log
     ;;
-  *) echo "Usage: $0 {deps|configure|build|spike|startup-roots|startup-trace}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {deps|configure|build|spike|gc-roots|startup-roots|startup-trace}" >&2; exit 2 ;;
 esac

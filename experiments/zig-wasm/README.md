@@ -24,6 +24,7 @@ The original baseline uses an installed jank compiler for host code generation a
 | The same module compiles to wasm32-WASI. | Failed on pointer width, platform guards and C++ threading dependencies. |
 | Newer Boehm collects on wasm64 with an explicit registered root. | Smoke passed through 32 forced collections. |
 | Newer Boehm discovers local roots with Asyncify. | Current smoke passes, but earlier variants lost live objects. Unresolved. |
+| Tagged-reference lifetime cases against the real jank runtime archive. | Native passes all seven; no automatic wasm64 strategy passes all. Explicit test-only shadow roots retain test locals but not runtime-internal lifetimes. |
 | Binaryen pointer spilling works in the collector test. | Failed during linking. The collector suite correctly exits 1. |
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
 | Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Node reaches a jank startup error; neither spike success marker is printed. |
@@ -31,7 +32,7 @@ The original baseline uses an installed jank compiler for host code generation a
 
 The native Zig C++ build still uses the installed jank package's matching libc++, libunwind and LLVM 23 compiler runtime. It does not rebuild all dependencies with Zig. The generated launcher's extraction also invokes the installed jank compiler before the final Zig compilation.
 
-The later wasm64 spike links the target runtime/core libraries and begins execution, but does not complete successfully. Startup diagnostics below establish a missing-static-root defect; only an explicitly rooted map retention control passes. A linked application is not evidence of correct general root discovery or a supported general-purpose Wasm runtime.
+The later wasm64 spike links the target runtime/core libraries and begins execution, but does not complete successfully. Startup diagnostics establish a missing-static-root defect. The real-runtime lifetime matrix below passes natively but finds no automatic wasm64 strategy that passes all cases; explicit test-only shadow slots do not cover runtime-internal locals. A linked application is not evidence of correct general root discovery or a supported general-purpose Wasm runtime.
 
 ## Environment
 
@@ -656,6 +657,163 @@ exit 0; the spike helper correctly returned **1**. Native `jank-test` returned
 0 in 12 s: **129/129** cases, **2029/2029** assertions, **868** jank files,
 **9** skips and **0** failures. No native/compiler/collector source behavior,
 dependency pin, or normal spike assertion was changed.
+
+### wasm64 tagged-reference collector lifetime matrix
+
+This AI-assisted follow-up tests `wasm-probe/gc-roots.cpp` against the actual
+`libjank-static-runtime.a`, not the standalone newer `gc.c` experiment. It calls
+`jank_init_base()`, never `jank_init_static()` or a core-module loader. It makes
+no startup fix and changes no runtime or collector source. The existing
+`POINTER_MASK` and private wasm64 collector backport are preserved.
+
+#### Commands and build variants
+
+From this experiment directory, in the existing Ubuntu 24.04 container:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh host
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh build
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh gc-roots
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+```
+
+The incremental host/target refreshes returned 0. The matrix returned **1** in
+25 s; native regression tests returned 0 in 9 s. Logs are
+`artifacts/logs/wasm64-gc-roots-*.log`, including separate compile, link and
+per-case execution logs. `artifacts/logs/wasm64-gc-roots.results` records every
+mode/case outcome. Cases run in separate processes so an abort cannot hide the
+remaining cases. The source also supports running all cases in one process;
+the matrix deliberately does not use that layout. Success requires both the
+case marker and `GC ROOTS: 1 passed, 0 failed`, plus exit 0.
+
+Probe compilation ends in `-O2`; Wasm links use the spike's `-O2
+-sMEMORY64=1 -fwasm-exceptions -Wl,--error-limit=0`, without SAFE_HEAP,
+ASSERTIONS, exception suppression or unresolved-symbol suppression. Runtime
+objects retain the normal archive build flags. Host flags come from the native
+compile database, without its PCH, and link the native archive with
+`-lz -ldl -pthread`. Wasm probe flags come from the target compile database.
+
+The Asyncify variant copies the real merged archive to
+`artifacts/build-wasm64-asyncify/libjank-static-runtime.a`, recompiles every
+collector `gc.dir` object from the target compile database with the **sole
+additional compiler flag** `-DEMSCRIPTEN_ASYNCIFY`, and replaces those members
+with `llvm-ar r`. This is the definition added by bdwgc's
+`enable_emscripten_asyncify` option. All other runtime/core members are unchanged.
+The link adds that option's `-sASYNCIFY -sASYNCIFY_STACK_SIZE=128000`.
+The spill variant adds `-sBINARYEN_EXTRA_PASSES=--spill-pointers` to the normal
+archive link. Neither variant replaces the collector with the newer GC probe.
+
+#### Cases, detector and controls
+
+All held test values are `object_ref`; tracked objects must have pointer tag
+`0xFFFA`. Integers are `make_box(i64)` values starting at `0x100000000`, not
+inline i32 values. Fixtures contain 128 alternating heap integers and persistent
+strings in a runtime-built persistent vector. `locals` keeps one local ref
+through 32 churn/forced-collection rounds and checks every element each round;
+`nested` keeps independent fixtures across 32 recursive frames and checks on
+unwind; `temporary` passes a newly produced fixture directly to a collecting
+callee. The two global cases differ only in registering the static tagged slot.
+With static-data registration, even the explicitly unregistered slot is covered
+by `__global_base..__data_end`, as intended.
+
+Each fixture object and every payload has a disappearing link stored as a
+hidden pointer in rooted `GC_MALLOC_ATOMIC` memory. Untagging for registration
+is confined to a noinline helper. The detector does not retain raw payload
+pointers. Cleared links are checked before payload access; automatic GC is
+disabled only during fixture construction/detector registration and payload
+verification, never during the tested churn/collection intervals. No language
+objects are retained in the detector array. `reclaim-control` drops the only
+ordinary reference and requires its hidden-only object's link to clear, with
+up to 32 collection rounds and stack clearing to reduce stale native roots.
+Every passing case also requires `GC_get_gc_no()` to advance.
+
+`runtime-internal` builds an 8,192-entry persistent hash map using runtime
+`assoc`, heap-boxed keys/values and free-space divisor 64. A collection-event
+hook counts collections **only while `assoc` executes**, excluding key/value
+setup and test verification. All payloads are weakly watched and final contents
+are checked only if none were lost. Native observed **33** such collections;
+default Wasm **26**, static-roots and shadow **13** each. Thus merely collecting
+between runtime calls cannot satisfy this case. This tests handwritten runtime
+allocation paths without injecting a collector call into runtime source.
+
+The explicit shadow control adds `GC_ROOTS_SHADOW`: a registered tagged slot
+array holds test refs with scoped clearing, including map/key/value inputs.
+It does **not** root handwritten runtime C++ locals, internal intermediate
+objects or nodes. It is not an automatic strategy or a runtime fix.
+
+#### Compile, link, execution and correctness results
+
+P = marker and clean exit; F = failing case marker and exit 1; A = execution
+aborts after markers (not a pass); L = link failed, case not executed.
+
+| Mode | locals | nested | temporary | runtime-internal | registered-global | unregistered-global | reclaim-control |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Native | P | P | P | P | P | P | P |
+| wasm64 default | F | F | F | F | P | F | P |
+| wasm64 static-roots | F | F | F | F | P | P | P |
+| wasm64 static-roots + Asyncify | A | A | A | A | A | A | A |
+| wasm64 static-roots + spill | L | L | L | L | L | L | L |
+| wasm64 static-roots + test shadow slots | P | P | P | F | P | P | P |
+
+All probe compilations and the Asyncify collector compilation/archive succeeded.
+All links except spill succeeded. All runnable non-Asyncify negative controls
+passed. Asyncify printed passing global/reclaim markers but still aborted with
+exit 1; its other four case markers were FAIL. It is not counted as passing any
+case. The exact SDK warning and execution diagnostics were:
+
+```text
+em++: warning: ASYNCIFY=1 is not compatible with -fwasm-exceptions. Parts of the program that mix ASYNCIFY and exceptions will not compile. [-Wemcc]
+Aborted(TypeError: Cannot convert null to a BigInt)
+RuntimeError: unreachable
+```
+
+This Emscripten 7.0.0 link happened to succeed despite the incompatibility
+warning; execution did not complete cleanly. No exception-disabled substitute
+is presented as a real-runtime pass, and the exact cause of the BigInt abort
+has not been isolated. Spill failed in Binaryen before execution:
+
+```text
+Fatal: getStackSpace: failed to find the stack pointer
+```
+
+Representative release failures (the normal log format, not a caught startup
+exception) were:
+
+```text
+CASE locals: FAIL collections=3 internal-collections=0
+CASE nested: FAIL collections=1 internal-collections=0
+CASE temporary: FAIL collections=3 internal-collections=0
+CASE runtime-internal: FAIL collections=26 internal-collections=26
+CASE unregistered-global: FAIL collections=3 internal-collections=0
+GC ROOTS: 0 passed, 1 failed
+```
+
+The shadow runtime-internal case likewise reports
+`CASE runtime-internal: FAIL collections=13 internal-collections=13`.
+The matrix never treats expected Wasm failures as success: exit 0 requires the
+host and at least one **automatic** Wasm mode to pass every case. No such mode
+passed. Native regression output was **129/129** doctest cases,
+**2031/2031** assertions, **870** jank files, **9** skips, **0** failures.
+
+#### Limits
+
+This finite optimized-source layout cannot prove general conservative scanning:
+compiler spills, accidental copies, detector instrumentation and changed link
+layout may preserve a value an uninstrumented application would lose. Noinline
+construction/registration/collection helpers, NaN-tag checks, no raw root
+copies, weak slots and the reclaim control reduce those false positives; they
+cannot eliminate them. Test-held collection construction is GC-disabled, so
+these cases do not validate allocation-time safety during fixture construction.
+The runtime-internal case separately exercises collection during actual runtime
+code, but does not identify the exact lost intermediate or prove every runtime
+allocation path safe. Internal vector/map nodes and string backing storage are
+not separately weakly watched; runtime operations themselves are not a memory
+safety sandbox. Passing payload checks are bounded observations, not a proof
+of absence of all dangling internal storage.
+
+No core startup, generated modules, JIT, browser, concurrency, arbitrary Wasm
+address ranges, or complete spike correctness is tested here. No runtime source
+change or supported production rooting strategy is claimed.
 
 ## Files
 

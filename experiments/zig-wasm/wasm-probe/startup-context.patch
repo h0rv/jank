@@ -1,0 +1,17 @@
+diff --git a/context-startup.cpp b/context-startup.cpp
+--- a/context-startup.cpp
++++ b/context-startup.cpp
+@@ -310,5 +310,13 @@
+     static auto const eof_throw_kw{ __rt_ctx->intern_keyword("", "eofthrow").expect_ok() };
+     static auto const default_reader_opts{ obj::persistent_array_map::create_unique(eof_kw,
+                                                                                     eof_throw_kw) };
++    static auto const original_type{ default_reader_opts.erase().get_type() };
++    static auto const original_gc{ GC_get_gc_no() };
++    if(default_reader_opts.erase().get_type() != obj::persistent_array_map::obj_type)
++    {
++      fprintf(stderr, "STARTUP cached defaults: original-type=%s current-type=%s original-gc=%zu current-gc=%zu code=%.80s\n",
++              object_type_str(original_type), object_type_str(default_reader_opts.erase().get_type()),
++              static_cast<size_t>(original_gc), static_cast<size_t>(GC_get_gc_no()), code.c_str());
++    }
+     return read_string(code, default_reader_opts);
+   }

@@ -1,4 +1,6 @@
 // AI-assisted runner: keeps the compiled live-demo module running and starts prime counts.
+// The page's ?v= stamp, passed on so a republish never mixes cached and new files.
+const version = document.currentScript?.src ? new URL(document.currentScript.src).search : '';
 const form = document.getElementById('run-form');
 const input = document.getElementById('input');
 const run = document.getElementById('run');
@@ -37,6 +39,7 @@ window.addEventListener('unhandledrejection', event => fail(event.reason));
 
 const options = {
   arguments: ['static-roots'],
+  locateFile: (path, dir) => `${dir}${path}${version}`,
   jankCollectEvery: 30,
   print: line => { diagnostics.textContent += `${line}\n`; },
   printErr: line => { diagnostics.textContent += `${line}\n`; },
@@ -61,7 +64,7 @@ if (typeof WebAssembly === 'undefined') {
   fail('WebAssembly is unavailable in this browser.');
 } else {
   const script = document.createElement('script');
-  script.src = 'live.js';
+  script.src = `live.js${version}`;
   script.onerror = () => fail('Could not load live.js. Serve all site files together over HTTP.');
   script.onload = () => createLive(options).then(instance => {
     module = instance;

@@ -24,8 +24,8 @@ The original baseline uses an installed jank compiler for host code generation a
 | The same module compiles to wasm32-WASI. | Failed on pointer width, platform guards and C++ threading dependencies. |
 | Newer Boehm collects on wasm64 with an explicit registered root. | Smoke passed through 32 forced collections. |
 | Newer Boehm discovers local roots with Asyncify. | Current smoke passes, but earlier variants lost live objects. Unresolved. |
-| Tagged-reference lifetime cases against the real jank runtime archive. | Native and static roots plus the private memory64-patched Binaryen spill pass pass all seven cases. Default/static-only Wasm still fail; test-only shadow slots miss runtime-internal lifetimes. |
-| Binaryen pointer spilling. | Stock SDK fails; preserved names plus a private stack-arithmetic patch allow the real-runtime spill matrix to pass. The separate isolated collector script still uses the unmodified SDK and is not fixed by this experiment. |
+| Tagged-reference lifetime cases against the real jank runtime archive. | Eleven cases pass with the follow-up's flatten/spill/EH-cleanup transform and explicit exception-storage roots. Without exception-storage roots, thrown-only payloads fail even natively. Default/static-only Wasm and test-only shadow slots still fail cases. |
+| Binaryen pointer spilling. | Stock SDK fails; preserved names, flattening and a private memory64/EH-cleanup patch cover the measured operands and unwind frames. The separate isolated collector script still uses the unmodified SDK and is not fixed by this experiment. |
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
 | Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Ordinary startup fails; static roots plus the private spill transform reach both markers with GC enabled, including 20 loaded-function entries. |
 | Fork-built wasm32 Emscripten runtime archive and generated spike. | Configure and Zig object succeeded; runtime/core and spike C++ fail on 64-bit pointer assumptions. No archive, link or Node execution. |
@@ -98,9 +98,10 @@ are reported rather than silently upgrading it.
 
 The wrapper hides Emscripten flags, memory64, Wasm exceptions, static-root
 registration and the post-link spill transform. **This remains the experimental
-spill/static-root path: ordinary startup still fails.** The pass misses roots
-held only on the Wasm operand stack, exception-edge root cleanup is unverified,
-and passing this bounded application is not general GC safety or supported
+spill/static-root path: ordinary startup still fails.** The collector follow-up
+below adds flattening and private exception-edge spill cleanup, but general
+exception-storage ownership remains unresolved outside its test harness.
+Passing this bounded application is not general GC safety or supported
 Wasm/browser portability. A memory64- and Wasm-exception-capable browser is
 required (the tested Chrome 156 has both). No threads, DOM/fetch application
 API or general browser platform layer is supplied.
@@ -1356,6 +1357,10 @@ link settings and unchanged real runtime archive are the same as step 1.
 
 ### wasm64 Binaryen spill-pointers with continuous GC
 
+This subsection records the PR #12 checkpoint. Its coverage gaps, command
+results and overhead figures are historical; the follow-up below supersedes
+the pass order, private patch and exception claims.
+
 This AI-assisted follow-up reuses the same container, SDK, Node, Zig and real
 23,888,468-byte runtime archive. No runtime/collector source, submodule pin or
 global tool installation changed. It tests **only pointer spilling**, plus the
@@ -1611,14 +1616,16 @@ calls, indirect calls, explicit return restoration and omission of i32 locals:
 
 ```sh
 docker exec --user 1000:1000 jank-host-build artifacts/build-binaryen/bin/wasm-opt \
-  wasm-probe/spill-memory64.wat --enable-memory64 --spill-pointers -g \
+  wasm-probe/spill-memory64.wat --enable-memory64 --enable-exception-handling \
+  --enable-bulk-memory --flatten --spill-pointers -g \
   -o artifacts/gc-roots/spill-memory64.wasm
 docker exec --user 1000:1000 jank-host-build .tools/node-v26.13.1-linux-x64/bin/node \
   wasm-probe/spill-memory64.mjs artifacts/gc-roots/spill-memory64.wasm
 python3 wasm-probe/startup-safepoints-check-test.py
 ```
 
-Observed callback results:
+Original PR #12 callback results (the command above uses the updated probe
+and now produces the follow-up results below):
 
 ```text
 SPILL COVERAGE: direct shadow-root=true stack-restored=true
@@ -1742,6 +1749,290 @@ The spill-enabled samples have GC enabled, but the collection counter stays
 inside each re-entry. Existing operand-stack/exception-root gaps still apply.
 Raw seven-sample timings, per-run logs, binaries and results stay under ignored
 `artifacts/spill-cost/`; the full native suite and browser were not rerun.
+
+### wasm64 spill follow-up: operand stacks and exception paths
+
+This is a collector-only extension of PR #12, using the same real runtime
+archives and Ubuntu container. No runtime source or SDK installation changed.
+The final pipeline is **`--flatten --spill-pointers`**, with no subsequent
+optimization. The private patch now also restores spill reservations on
+exceptional exit and clears fresh spill slots when bulk memory is available.
+The checked-in patch applies to clean Binaryen `a9141c8cc` and was compared
+byte-for-byte with the locally built `src/abi/stack.h`.
+
+#### Operand coverage and pass order
+
+`SpillPointers.cpp` recommends optimization **after** spilling to reduce
+overhead; neither its comments nor `test/passes/spill-pointers.wast` requires
+flattening. The test driver (`scripts/test/wasm_opt.py`) selects passes from
+the filename or a `.passes` file; this test has no `.passes` override and runs
+only `--spill-pointers`. Those tests therefore do not establish operand-stack
+coverage. The implementation's original-local liveness analysis still misses
+an operand whose local is dead by the time another argument calls the collector.
+Flattening first materializes that operand into a live local.
+
+The focused WAT/Node probe passes with all three tested pipelines:
+
+| Pipeline | Direct / indirect / early | Operand | Unwind drift after 10,000 catches | i32 nonpointer |
+| --- | --- | --- | ---: | --- |
+| flatten, spill | rooted | rooted | 0 | not spilled |
+| flatten, spill, simplify-locals | rooted | rooted | 0 | not spilled |
+| flatten, spill, -O1 | rooted | rooted | 0 | not spilled |
+
+Every collection callback must see the tagged i64, including all **20,000**
+callbacks in the unwind loop, not just the final callback. These later passes
+preserve the tested stores; this is not a guarantee about arbitrary pass orders.
+The default deliberately does not run any post-spill optimization.
+
+The new runtime `operand` case calls noinline helpers as
+`consume_operand(operand_value(), collecting_argument(), begin)`. Its vector,
+strings and boxed integers are weakly watched. The second argument returns
+`GC_get_gc_no()`, not a constant: an initial constant-return version was
+optimized to a standalone void call and **did not test the operand gap**.
+The final clang **-O2**, pre-Binaryen Wasm really contains:
+
+```wat
+(call $consume_operand
+  (call $operand_value)
+  (call $collecting_argument)
+  (local.get $begin))
+```
+
+Wasm evaluates the first i64 result before calling the second argument. That
+order is observed in this compiler's output, not promised by C++ argument-order
+rules. The extracted function is in `artifacts/gc-roots/clang-O2-operand.wat`.
+Transforming this same input with spill alone prints
+`CASE operand: FAIL collections=2 internal-collections=0` (exit 1); adding
+flatten prints the corresponding PASS line (exit 0). Thus this is not merely
+a hand-written WAT pattern or an untested clang hypothesis.
+
+`nonpointer` is specifically an **i32 value 42**, not a tagged reference.
+Canonical jank `object_ref`s are i64 under memory64 and are covered here.
+This pass still ignores non-i64 carriers: truncating a pointer into i32 loses
+its high address/tag bits, and preserving pointer bits in f64 would require
+different spilling/reconstruction. Neither is validated as a GC root by this
+probe. No audit proving that all pointer-derived i32/f64 intermediates are
+dead at every runtime collecting call was performed. Do not extrapolate this
+result to arbitrary pointer encodings or all possible optimized code.
+
+#### Exception cases, storage, and cleanup
+
+Three new cases use real Wasm exceptions (`-fwasm-exceptions`):
+
+* `exception-local`: the caller retains a tagged fixture across four
+  intermediate unwind destructors. Each destructor forces collection and
+  checks disappearing links; the catch handler collects again, then checks
+  type/value contents only if all links survived. Native, shadow-slot, and
+  Binaryen-spilled variants exercise different placements of that reference.
+* `exception-payload`: the real `jank_throw` from `c_api.cpp` throws an
+  `object_ref` by value. A fixture is passed directly to that path; its only
+  intended surviving owner is the exception, caught by **const reference**.
+  Destructors and the catch both collect. No raw payload pointer is retained
+  by the observer and no reclaimed payload is dereferenced.
+* `exception-stack`: 10,000 throws traverse three intermediate frames. Every
+  1,000th iteration collects from all three destructors and the catch; each
+  catch is followed by a stack-pointer equality/live-link check. It then
+  reruns locals, nested, temporary and operand cases. A combined all-cases
+  execution also runs runtime-internal/global/reclaim tests afterward.
+
+**Exception storage is an independent root gap, including natively.**
+Emscripten libc++abi's `__cxa_allocate_exception` obtains storage from
+`__aligned_malloc_with_fallback` (ordinary malloc storage, not a Boehm object).
+Native libstdc++ and the unregistered spill variant both lose the thrown-only
+payload during unwind. Both retain ordinary caller refs. The new native
+`host-exception-roots` and Wasm `spill-exception-roots` controls link with
+`-Wl,--wrap=__cxa_throw`: for RTTI type `object_ref`, they register the actual
+exception payload word with `GC_add_roots` **before** throwing. A guard in the
+test catch removes that range before `__cxa_end_catch` frees the exception.
+All eleven cases pass with this extra registration; the unrooted failures
+remain separately reported, not relabeled as passes.
+
+The container's native `libstdc++.so.6` disassembly also shows
+`__cxa_allocate_exception` calling `malloc@plt` at `0xb9d47`; malloc storage
+here is not just an assumption based on the Wasm library implementation.
+
+This registration is **test-harness integration**, not a change to jank's
+production exception ABI. The paired test catch controls cleanup. Arbitrary
+catch sites, rethrows, `exception_ptr`, uncaught exceptions, nested exception
+ownership and other exception types have not been supplied a general root
+lifetime mechanism. In particular, the spike is not linked with this shim.
+
+The initial private i64 patch restored only normal returns. A minimized
+no-LLVM-cleanup WAT function showed `catch-stack-drift=-16` after one throw,
+even though its exported function eventually restored SP on return. Checking
+only SP **after function return** would have hidden that leak. The private
+patch now wraps each allocated spill frame with a catch-all cleanup and
+rethrows the original exception after restoring the entry SP. Existing
+delegates to the caller are retargeted through that cleanup. This makes the
+focused 10,000-catch loop's drift zero. The C++ loop was already balanced by
+LLVM's own landing-pad SP resets in this particular output; its passing result
+alone would not have proved the Binaryen cleanup correct.
+
+Flattening also exposed a conservative-retention regression: the unchanged
+reclaim control stayed alive through **64 collections**, including with `-O1`
+after spilling. Clearing fresh spill reservations (`memory.fill` when bulk
+memory is available) restores the reclaim PASS after two collections. This
+is consistent with stale words in unused slots; the exact retaining word was
+not located, so that finer causal diagnosis remains unverified. The negative
+control was not weakened or special-cased.
+
+#### Full release matrix and markers
+
+P = PASS marker plus exit 0; F = failing marker; A = execution aborted.
+L/N/T/R are locals/nested/temporary/runtime-internal, G+/G- are registered/
+unregistered globals, RC is reclaim-control. All modes compiled and linked.
+
+| Mode | L | N | T | R | G+ | G- | RC | Operand | EH caller | EH payload | EH 10k |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Native | P | P | P | P | P | P | P | P | P | F | P |
+| Native + exception-storage roots | P | P | P | P | P | P | P | P | P | P | P |
+| wasm64 default | F | F | F | F | P | F | P | F | F | F | F |
+| Static roots | F | F | F | F | P | P | P | F | F | F | F |
+| Static roots + Asyncify | A | A | A | A | A | A | A | A | A | A | A |
+| Static roots + flatten/spill | P | P | P | P | P | P | P | P | P | F | P |
+| Static roots + flatten/spill + exception-storage roots | P | P | P | P | P | P | P | P | P | P | P |
+| Test shadow slots | P | P | P | F | P | P | P | P | P | F | P |
+
+Asyncify still warns that `ASYNCIFY=1 is not compatible with -fwasm-exceptions`
+and aborts with `Aborted(TypeError: Cannot convert null to a BigInt)` /
+`RuntimeError: unreachable`. Some cases print PASS before aborting; those
+are still A, never P. Default/static-only exception-stack tests stop after
+the first lost fixture instead of continuing to dereference it.
+
+The matrix's success gate now uses the **registered-exception native control**
+and a complete passing Wasm variant; it does not imply that the unmodified
+native thrown-payload case passes. Every original mode and every new control
+still has its own per-case verdict/log. The full summary is
+`artifacts/logs/wasm64-gc-roots.results`.
+
+Exact augmented-spill summary lines:
+
+```text
+spill-exception-roots locals: PASS (exit=0)
+spill-exception-roots nested: PASS (exit=0)
+spill-exception-roots temporary: PASS (exit=0)
+spill-exception-roots runtime-internal: PASS (exit=0)
+spill-exception-roots registered-global: PASS (exit=0)
+spill-exception-roots unregistered-global: PASS (exit=0)
+spill-exception-roots reclaim-control: PASS (exit=0)
+spill-exception-roots operand: PASS (exit=0)
+spill-exception-roots exception-local: PASS (exit=0)
+spill-exception-roots exception-payload: PASS (exit=0)
+spill-exception-roots exception-stack: PASS (exit=0)
+```
+
+Additional actual case markers include:
+
+```text
+EXCEPTION payload: unwind-collections=8 retained-during-unwind=1 storage-roots=1
+CASE exception-payload: PASS collections=10 internal-collections=0
+EXCEPTION stack: iterations=10000 before=1551504 after=1551504 unwind-collections=60 recovery=1
+CASE exception-stack: PASS collections=115 internal-collections=0
+```
+
+The same unrooted spill payload prints `retained-during-unwind=0 storage-roots=0`
+and `CASE exception-payload: FAIL collections=10 internal-collections=0`.
+Native unrooted payload prints FAIL with six collections. The final matrix
+command returned `gc-roots: exit=0 elapsed=46s`. Combined runs, with all tests
+sharing one process, both print `GC ROOTS: 11 passed, 0 failed`:
+
+```sh
+docker exec --user 1000:1000 jank-host-build artifacts/gc-roots/host-exception-roots default
+docker exec --user 1000:1000 jank-host-build .tools/node-v26.13.1-linux-x64/bin/node \
+  artifacts/gc-roots/spill-exception-roots.js static-roots
+```
+
+#### Startup regression and overhead
+
+At the old default **64 KiB** stack, the flattened spike failed even with GC
+disabled: first `__next_prime overflow`, then
+`RuntimeError: memory access out of bounds` in `emscripten_builtin_free` while
+destroying the caught `std::runtime_error`. `-O1` did not fix it. Relinking
+identical objects with a **4 MiB** stack removes this no-GC failure and permits
+the continuous-GC markers. This discriminates stack headroom from a GC-only
+root cause, though the exact overflowing write/high-water mark was not traced.
+Only the experimental `startup-spill` link now reserves 4 MiB, identically
+for its baseline and transformed comparisons. Other build/browser modes are
+unchanged. The additional reserved linear stack is **4,128,768 bytes**; it is
+not included in the Boehm heap measurements.
+
+The final command prints both success markers for every continuous-GC entry:
+
+```text
+STARTUP ITERATION 1/20: collections=15 used-bytes=16818176 heap-bytes=18784256 status=0
+STARTUP ITERATION 20/20: collections=15 used-bytes=16818176 heap-bytes=18784256 status=0
+STARTUP VERDICT: mode=continuous PASS iterations=20 passed=20 failed=0 exit=0
+STARTUP SPILL VERDICT: PASS
+```
+
+Collections advance from 1 to 15 during entry 1, not during entries 2–20.
+GC is enabled throughout. The unspilled, GC-enabled baseline still traps with
+`RuntimeError: function signature mismatch` in `jank::runtime::reduce` before
+either marker; its GC-disabled control passes 20/20. No continuous-GC timing
+ratio against that failing baseline is valid.
+
+The new code-size/time figures below supersede PR #12's seven-case/no-flatten
+numbers. All are diagnostic `-O2 -g` builds; names are retained for stack-global
+lookup. Binaryen warns `flatten` is not fully compatible with DWARF, so source
+debug locations must not be assumed accurate after transformation.
+
+| Module | Unspilled bytes | Flatten/spill bytes | Increase |
+| --- | ---: | ---: | ---: |
+| gc-roots, no exception shim | 6,151,640 | 9,136,891 | 48.528% |
+| gc-roots, exception shim | 6,151,417 | 9,137,519 | 48.543% |
+| Startup/spike | 10,531,767 | 25,491,014 | 142.039% |
+
+The startup output is **45.922% larger** than PR #12's 17,468,899-byte spill
+output. The matched successful GC-disabled 20-entry medians are now
+**0.170318 s → 3.866835 s = 22.704×** whole-process time, versus the historical
+5.652×. Samples were baseline 0.170318/0.168529/0.196102 s and transformed
+3.866835/3.664097/4.560281 s. These include Node compilation/instantiation,
+zeroing and startup, ran alongside the matrix, and have visible variability;
+they are not an isolated measurement of steady-state GC or exception cost.
+The continuous-GC 20-entry run took 4.811834 s.
+The gc-roots input now contains four additional cases, so comparison to its
+old seven-case module is not an isolated measurement of pass-order cost.
+
+#### Reproduction and native regressions
+
+Reapply the expanded private patch to a **clean** `a9141c8cc` tree and rebuild
+`artifacts/build-binaryen/bin/wasm-opt` using the earlier instructions. Do not
+apply it on top of the old i64-only patch. Then run from this directory:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh gc-roots
+docker exec --user 1000:1000 -e SAFEPOINT_ITERATIONS=20 jank-host-build \
+  bash scripts/build-wasm64-target.sh startup-spill
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+docker exec --user 1000:1000 jank-host-build python3 wasm-probe/startup-safepoints-check-test.py
+```
+
+For focused pass-order checks, use the updated WAT command in the preceding
+subsection, optionally append `--simplify-locals` or `-O1` after spilling,
+then run the Node harness. Logs are `artifacts/logs/spill-gaps-pass-order.log`;
+`spill-gaps-unpatched-wat.log` retains the original -16-byte failure and
+`spill-gaps-operand-unflattened.log` the actual clang operand failure.
+
+The native suite was rerun (unchanged runtime archive), not just the native
+differential probe:
+
+```text
+test: exit=0 elapsed=8s
+tested 870 jank files with 9 skips and 0 failures
+[doctest] test cases:  129 |  129 passed | 0 failed | 0 skipped
+[doctest] assertions: 2031 | 2031 passed | 0 failed |
+[doctest] Status: SUCCESS!
+```
+
+The marker validator also reports `Ran 9 tests` / `OK`. An initial unittest
+discovery invocation did not discover this hyphenated script (zero tests,
+exit 5); direct execution above ran the actual tests.
+
+These are bounded canonical-i64, single-threaded Node observations, not
+general Wasm support. They do not validate browser behavior, arbitrary tail
+calls, suspension/callbacks, high addresses, stack-overflow handling, all
+runtime code paths, or production exception ownership. Weak links guard the
+observed objects, not every internal vector/map node or backing allocation.
 
 ## Files
 

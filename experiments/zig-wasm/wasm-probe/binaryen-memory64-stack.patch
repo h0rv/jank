@@ -1,7 +1,22 @@
+# AI-assisted private patch for Binaryen a9141c8cc.
+# Use i64 allocation/restoration for memory64; restore the entry stack pointer
+# on exceptional exit as well. Existing delegates to the caller must enter the
+# new cleanup handler rather than bypass it. Zero fresh reservations when bulk
+# memory is available so unused slots do not conservatively retain old objects.
+# Spilling/liveness is unchanged; flattening is a separate prerequisite.
 diff --git a/src/abi/stack.h b/src/abi/stack.h
 --- a/src/abi/stack.h
 +++ b/src/abi/stack.h
-@@ -61,5 +61,10 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
+@@ -20,6 +20,8 @@
+ #include "asmjs/shared-constants.h"
++#include "ir/branch-utils.h"
+ #include "ir/find_all.h"
+ #include "ir/global-utils.h"
++#include "ir/names.h"
+ #include "shared-constants.h"
+ #include "wasm-builder.h"
+ #include "wasm-emscripten.h"
+@@ -61,5 +63,10 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
                           builder.makeGlobalGet(stackPointer->name, pointerType),
                           builder.makeConst(int32_t(size)));
 +  } else if (pointerType == Type::i64) {
@@ -12,8 +27,16 @@ diff --git a/src/abi/stack.h b/src/abi/stack.h
    } else {
      WASM_UNREACHABLE("unhandled pointerType");
    }
-@@ -67,10 +72,12 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
+@@ -67,10 +74,20 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
      stackPointer->name, builder.makeLocalTee(local, added, pointerType)));
++  if (wasm.features.hasBulkMemory()) {
++    block->list.push_back(builder.makeMemoryFill(
++      builder.makeLocalGet(local, pointerType),
++      builder.makeConst(int32_t(0)),
++      pointerType == Type::i64 ? builder.makeConst(int64_t(size))
++                               : builder.makeConst(int32_t(size)),
++      wasm.memories[0]->name));
++  }
    auto makeStackRestore = [&]() {
      return builder.makeGlobalSet(
        stackPointer->name,
@@ -27,3 +50,24 @@ diff --git a/src/abi/stack.h b/src/abi/stack.h
    };
    // add stack restores to the returns
    FindAllPointers<Return> finder(func->body);
+@@ -115,4 +132,20 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
+   }
+   block->finalize();
+   func->body = block;
++  if (wasm.features.hasExceptionHandling()) {
++    auto labels = BranchUtils::getBranchTargets(block);
++    auto name = Names::getValidName(
++      "spill_unwind", [&](Name name) { return !labels.contains(name); });
++    FindAll<Try> tries(block);
++    for (auto* tryy : tries.list) {
++      if (tryy->delegateTarget == DELEGATE_CALLER_TARGET) {
++        tryy->delegateTarget = name;
++      }
++    }
++    func->body = builder.makeTry(
++      name,
++      block,
++      {},
++      {builder.makeSequence(makeStackRestore(), builder.makeRethrow(name))});
++  }
+ }

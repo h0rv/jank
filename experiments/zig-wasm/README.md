@@ -52,47 +52,55 @@ The GC experiment pins Emscripten 7.0.0 and Boehm commit `91f30f37b0457566e9823b
 
 ### One command: native + Wasm
 
-This AI-assisted Linux x86_64 research wrapper builds the same jank and Zig
-sources for both targets from the host shell:
+This AI-assisted Linux x86_64 research wrapper builds the same jank sources
+for native and Wasm from the host shell. Zig is an optional native-library
+input, not what enables the Wasm build: Emscripten's Clang/LLVM compiles and
+links jank's generated C++ and runtime for Wasm.
 
 ```sh
 cd experiments/zig-wasm
-./jank-zig build
-./jank-zig check
-./jank-zig run native       # Ubuntu 24.04 executable, run in the container
-./jank-zig run node
-./jank-zig run browser      # opens Chrome; keeps its local server running
-./jank-zig serve            # http://127.0.0.1:8765/; Ctrl-C to stop
+./jank-build build
+./jank-build check
+./jank-build run native       # Ubuntu 24.04 executable, run in the container
+./jank-build run node
+./jank-build run browser      # opens Chrome; keeps its local server running
+./jank-build serve            # http://127.0.0.1:8765/; Ctrl-C to stop
 ```
 
 Every command accepts an optional final project directory, defaulting to this
-experiment's spike. A project contains `jank-zig.json`:
+experiment's Zig interop spike. `jank-zig` remains a thin alias forwarding all
+arguments unchanged. A project contains `jank-build.json`; the driver falls
+back to `jank-zig.json` only when the new filename is absent:
 
 ```json
-{"name": "hello", "main": "hello.core", "jank": "src", "zig": "zig/main.zig",
+{"name": "hello", "main": "hello.core", "jank": "src",
  "expect": ["hello: checks passed"]}
 ```
 
 `main` names the namespace whose `-main` runs. Defaults are the directory name
-for `name`, `src` for `jank`, and `native.zig` for `zig`; source paths must stay
-inside the project. `expect` is required and contains nonempty exact output
+for `name` and `src` for `jank`; source paths must stay inside the project.
+Omit `zig` for pure-jank projects: no Zig SDK, library build or kernel object
+is needed. Native C++ then uses the container's Clang 23 with libstdc++.
+`expect` is required and contains nonempty exact output
 lines, or an object with `native`, `node`, and `browser` line lists. Checks
 require exit 0 **and** those lines (jank AOT can exit 0 after a failed assert).
-An optional `build.zig` overrides the generated native library build and must
-install both static/shared libraries named `name`; the Wasm kernel compiles
+To link an optional Zig library, add `"zig": "native.zig"` (or another root
+source path). For those projects, `build.zig` overrides the generated library
+build and must install both static/shared libraries named `name`; the Wasm kernel compiles
 directly from `zig`. Multi-file Zig imports relative to that root are supported.
 Sources are copied into fresh ignored staging for each platform, including all
 transitively emitted jank modules; inputs are not modified. Project names must
 be unique within this checkout's output directory.
 
 ```sh
-./jank-zig check examples/hello-cljc  # builds and checks native, Node and Chrome
-./jank-zig run browser examples/hello-cljc
+./jank-build check examples/hello-cljc  # pure jank; native, Node and Chrome
+./jank-build run browser examples/hello-cljc
+./jank-zig check examples/hello-cljc    # legacy alias, same command
 ```
 
-This second example shares its entry namespace, borrowed-buffer Zig kernel and
-checks across three jank namespaces. Its `hello/platform.cljc` selects a thin
-output layer with `#?(:wasm ... :native ...)`: native stdout, browser `#app`, or
+This pure-jank example computes the weighted sum of `[1 2 3 4]` as 30 and shares
+its logic and checks across three namespaces. Its `hello/platform.cljc` selects
+a thin output layer with `#?(:wasm ... :native ...)`: native stdout, browser `#app`, or
 Node console. Host jank receives repeatable `--reader-feature native` or
 `--reader-feature wasm` during source generation; features also separate its
 binary-version cache. `:jank` still matches both builds, so put platform branches
@@ -114,8 +122,9 @@ prints a verdict table. Logs and browser DOM evidence are in
 Docker, Python 3, curl, tar, Git and (for browser commands) `google-chrome`
 must already be available on the host. The wrapper creates/starts the
 `jank-host-build` Ubuntu 24.04 container, installs its documented pinned LLVM
-23.1.6 dependencies **inside the container only**, downloads local Zig
-0.17.1/Node 26.13.1/Emscripten 7.0.0, initializes pinned submodules, and builds
+23.1.6 dependencies **inside the container only**, downloads local Node
+26.13.1/Emscripten 7.0.0 (and Zig 0.17.1 only for projects with `zig`),
+initializes pinned submodules, and builds
 missing host/native/Wasm runtime artifacts and the private patched Binaryen.
 Existing prerequisites are reused; app outputs are rebuilt each invocation.
 If compiler/runtime sources change, explicitly refresh the prerequisite builds

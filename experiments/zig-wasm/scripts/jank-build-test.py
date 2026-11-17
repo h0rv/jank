@@ -9,7 +9,7 @@ import unittest
 from unittest import mock
 
 sys.dont_write_bytecode = True
-SPEC = importlib.util.spec_from_file_location('driver', pathlib.Path(__file__).with_name('jank-zig.py'))
+SPEC = importlib.util.spec_from_file_location('driver', pathlib.Path(__file__).with_name('jank-build.py'))
 driver = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = driver
 SPEC.loader.exec_module(driver)
@@ -87,14 +87,14 @@ class ProjectTests(unittest.TestCase):
         self.config = {'main': 'hello.core', 'expect': ['done']}
 
     def load(self):
-        (self.root / 'jank-zig.json').write_text(driver.json.dumps(self.config))
+        (self.root / 'jank-build.json').write_text(driver.json.dumps(self.config))
         return driver.load_project(self.root)
 
     def test_defaults(self):
         project = self.load()
         self.assertEqual(project.name, self.root.name)
         self.assertEqual(project.jank, self.root / 'src')
-        self.assertEqual(project.zig, self.root / 'native.zig')
+        self.assertIsNone(project.zig)
         self.assertEqual(project.expected('browser'), ('done',))
         self.assertEqual(project.wasm_check, 'single')
 
@@ -142,7 +142,7 @@ class ProjectTests(unittest.TestCase):
 
     def test_invalid_json_and_shape(self):
         for text in ('', '[]', '{'):
-            (self.root / 'jank-zig.json').write_text(text)
+            (self.root / 'jank-build.json').write_text(text)
             with self.subTest(text=text), self.assertRaises(RuntimeError):
                 driver.load_project(self.root)
 
@@ -150,7 +150,52 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(driver.load_project().wasm_check, 'spike-continuous')
         project = driver.load_project(driver.ROOT / 'examples/hello-cljc')
         self.assertEqual(project.main, 'hello.core')
+        self.assertIsNone(project.zig)
         self.assertIn('platform: browser', project.expected('browser'))
+
+    def test_optional_zig_source(self):
+        self.config['zig'] = 'native.zig'
+        self.assertEqual(self.load().zig, self.root / 'native.zig')
+        self.assertIsNotNone(driver.load_project().zig)
+
+    def test_legacy_config_fallback_and_new_config_precedence(self):
+        (self.root / 'jank-zig.json').write_text(driver.json.dumps(
+            {**self.config, 'name': 'legacy', 'zig': 'native.zig'}))
+        self.assertEqual(driver.load_project(self.root).name, 'legacy')
+        self.assertEqual(self.load().name, self.root.name)
+        (self.root / 'jank-build.json').write_text('{')
+        with self.assertRaisesRegex(RuntimeError, 'Cannot read project config'):
+            driver.load_project(self.root)
+
+    def test_pure_jank_bootstrap_never_probes_zig(self):
+        project = self.load()
+        digest = driver.hashlib.sha256(b'patch').hexdigest()
+        with mock.patch.object(driver, 'container'), \
+                mock.patch.object(driver, 'logged') as logged, \
+                mock.patch.object(driver.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)), \
+                mock.patch.object(driver.subprocess, 'check_output') as output, \
+                mock.patch.object(pathlib.Path, 'mkdir'), \
+                mock.patch.object(pathlib.Path, 'is_file', autospec=True,
+                                  side_effect=lambda path: path != driver.ZIG), \
+                mock.patch.object(pathlib.Path, 'read_bytes', return_value=b'patch'), \
+                mock.patch.object(pathlib.Path, 'read_text', return_value=digest):
+            driver.prerequisites(project)
+        output.assert_not_called()
+        self.assertEqual([call.args[0] for call in logged.call_args_list], ['submodules'])
+
+    def test_pure_jank_build_skips_zig_build_file(self):
+        self.load()
+        with mock.patch.object(driver, 'OUT', self.root / 'artifacts/app'), \
+                mock.patch.object(driver, 'prerequisites'), \
+                mock.patch.object(driver, 'logged') as logged, \
+                mock.patch.object(driver, 'generate_sources', return_value=([], self.root / 'main.cpp')), \
+                mock.patch.object(driver, 'build_native'), \
+                mock.patch.object(driver, 'build_wasm'):
+            driver.build(self.root)
+        logged.assert_not_called()
+        for platform in ('native', 'wasm'):
+            self.assertFalse((self.root / 'artifacts/app' / self.root.name /
+                              f'stage-{platform}/build.zig').exists())
 
     def test_compile_flags_strip_outputs(self):
         flags, directory = driver.wasm_compile_flags([{

@@ -1,9 +1,9 @@
 <!doctype html>
-<!-- AI-assisted experimental jank + Zig memory64 runner. -->
+<!-- AI-assisted experimental jank memory64 runner. -->
 <html lang="en" data-status="running">
 <meta charset="utf-8">
-<title>jank + Zig: running</title>
-<h1>jank + Zig (experimental wasm64)</h1>
+<title>jank: running</title>
+<h1>jank (experimental wasm64)</h1>
 <pre id="app"></pre>
 <pre id="stdout"></pre>
 <script>
@@ -16,7 +16,7 @@
   }
   function finish(ok) {
     document.documentElement.dataset.status = ok ? 'pass' : 'fail';
-    document.title = 'jank + Zig: ' + (ok ? 'PASS' : 'FAIL');
+    document.title = 'jank: ' + (ok ? 'PASS' : 'FAIL');
   }
   window.addEventListener('error', event => { write(event.message); finish(false); });
   window.addEventListener('unhandledrejection', event => { write(event.reason); finish(false); });

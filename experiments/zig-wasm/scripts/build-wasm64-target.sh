@@ -121,6 +121,62 @@ PY
     grep -Fxq 'jank -> Zig: scalar and wide result checks passed' artifacts/logs/wasm64-spike-run.log
     grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' artifacts/logs/wasm64-spike-run.log
     ;;
+  startup-safepoints)
+    run startup-safepoints-generate generate_spike
+    run startup-safepoints-compile python3 - "$ROOT" <<'PY'
+import json, pathlib, shlex, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+out = root / 'artifacts/wasm64-spike'
+build = root / 'artifacts/build-wasm64'
+database = json.loads((build / 'compile_commands.json').read_text())
+entry = next(x for x in database if x['file'].endswith('/src/cpp/jank/runtime/context.cpp'))
+args = iter(shlex.split(entry['command']))
+flags = [next(args)]
+for arg in args:
+    if arg in ('-o', '-MF', '-MT', '-MQ'):
+        next(args)
+    elif arg not in ('-c', '-MD', '-MMD', entry['file']):
+        flags.append(arg)
+version = (out / 'host-version').read_text().strip()
+objects = []
+sources = [(out / 'main.cpp', 'main', ['-Dmain=jank_spike_main']),
+           (root / f'jank/target/_cache/{version}/spike/core.cpp', 'core', []),
+           (root / 'wasm-probe/startup-driver.cpp', 'driver', ['-DJANK_STARTUP_SPIKE_ONLY'])]
+for source, label, extra in sources:
+    obj = out / f'startup-safepoints-{label}.o'
+    subprocess.run(flags + ['-O2', '-g', *extra, '-c', str(source), '-o', str(obj)],
+                   cwd=entry['directory'], check=True)
+    objects.append(str(obj))
+subprocess.run([str(root / '.tools/zig-x86_64-linux-0.17.1/zig'), 'build-obj',
+                str(root / 'native.zig'), '-target', 'wasm64-freestanding', '-O', 'ReleaseSafe',
+                f'-femit-bin={out / "startup-safepoints-zig.o"}',
+                '--cache-dir', str(root / '.zig-cache'),
+                '--global-cache-dir', str(root / '.zig-cache/global')], check=True)
+subprocess.run([flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1', '-fwasm-exceptions',
+                '-sALLOW_MEMORY_GROWTH=1',
+                *objects, str(out / 'startup-safepoints-zig.o'),
+                str(build / 'libjank-static-runtime.a'), '-Wl,--error-limit=0',
+                '-o', str(out / 'startup-safepoints.js')], check=True)
+PY
+    failed=0
+    : > artifacts/logs/wasm64-startup-safepoints.results
+    for strategy in no-gc static-roots safepoint; do
+      status=0
+      run "startup-safepoints-$strategy" "$ROOT/.tools/node-v26.13.1-linux-x64/bin/node" \
+        "$SPIKE/startup-safepoints.js" "$strategy" || status=$?
+      scalar=missing buffer=missing
+      log="artifacts/logs/wasm64-startup-safepoints-$strategy.log"
+      grep -Fxq 'jank -> Zig: scalar and wide result checks passed' "$log" && scalar=present
+      grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' "$log" && buffer=present
+      printf '%s: exit=%s scalar=%s buffer=%s\n' "$strategy" "$status" "$scalar" "$buffer" |
+        tee -a artifacts/logs/wasm64-startup-safepoints.results
+      if [[ "$strategy" != static-roots ]] &&
+          { [[ "$status" != 0 ]] || [[ "$scalar" != present ]] || [[ "$buffer" != present ]]; }; then
+        failed=1
+      fi
+    done
+    exit "$failed"
+    ;;
   gc-roots)
     run gc-roots python3 "$ROOT/wasm-probe/gc-roots-matrix.py" "$ROOT"
     ;;
@@ -241,5 +297,5 @@ PY
     grep -Fxq 'jank -> Zig: scalar and wide result checks passed' artifacts/logs/wasm64-startup-trace-wasm64-default.log
     grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' artifacts/logs/wasm64-startup-trace-wasm64-default.log
     ;;
-  *) echo "Usage: $0 {deps|configure|build|spike|gc-roots|startup-roots|startup-trace}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {deps|configure|build|spike|gc-roots|startup-roots|startup-trace|startup-safepoints}" >&2; exit 2 ;;
 esac

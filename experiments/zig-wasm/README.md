@@ -29,6 +29,7 @@ The original baseline uses an installed jank compiler for host code generation a
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
 | Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Node reaches a jank startup error; neither spike success marker is printed. |
 | Tagged jank map retention across wasm64 collections. | An explicitly registered static root passes; the default unregistered root is lost. This is a diagnostic control, not a runtime rooting solution. |
+| Real wasm64 spike with GC disabled during execution and explicit top-level collections. | Both success markers printed; post-call collection reclaimed collector space. No post-collection jank re-entry tested. |
 
 The native Zig C++ build still uses the installed jank package's matching libc++, libunwind and LLVM 23 compiler runtime. It does not rebuild all dependencies with Zig. The generated launcher's extraction also invokes the installed jank compiler before the final Zig compilation.
 
@@ -814,6 +815,91 @@ of absence of all dangling internal storage.
 No core startup, generated modules, JIT, browser, concurrency, arbitrary Wasm
 address ranges, or complete spike correctness is tested here. No runtime source
 change or supported production rooting strategy is claimed.
+
+### wasm64 top-level GC safepoint spike experiment
+
+This AI-assisted experiment reuses the real host compiler and wasm64 runtime
+archive from the lifetime matrix. It generates the actual `spike.core` launcher
+and module, links the unchanged runtime archive and Zig implementation, and
+compares three argv-selected modes of `wasm-probe/startup-driver.cpp` in one
+Node executable. No diagnostic context patch or fake implementation is linked.
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh startup-safepoints
+```
+
+`safepoint` registers `__global_base..__data_end` and disables GC during the
+entire generated launcher call. Immediately before that call and after it
+returns, with no jank/runtime frames live, the driver performs exactly
+`GC_enable(); GC_gcollect(); GC_disable();`. It reports collection count,
+collector heap/free/used bytes and disabled state around each collection.
+Existing `no-gc` and `static-roots` collector policies are unchanged.
+`JANK_STARTUP_SPIKE_ONLY` omits the unrelated assertion-launcher dependency;
+the existing startup-trace harness still supports its assertion control.
+
+Probe objects and link use `-O2 -g`, with `--profiling-funcs` at link for named
+trap frames, memory64 and Wasm exceptions. No SAFE_HEAP or unresolved-symbol
+suppression is used. The link adds `-sALLOW_MEMORY_GROWTH=1` for **all three**
+modes, as the earlier startup-trace harness did: an initial fixed-memory attempt
+aborted with `Aborted(OOM)` in both GC-disabled modes before completing startup.
+Emscripten warns that DWARF limits Binaryen post-link optimizations, so this is
+an optimized diagnostic build, not a claim about every release layout.
+
+Generation returned 0 in 2 s and compilation/link returned 0 in 8 s.
+The comparison command returned 0, requiring both success markers and clean
+exit for no-gc and safepoint; it records, but does not require success from,
+the static-roots comparison. The per-mode observations were:
+
+| Mode | Node exit | Both spike markers | First error | Collection count before/after execution |
+| --- | ---: | --- | --- | --- |
+| no-gc | 0 | Present | None | 1 / 1 |
+| static-roots | 1 | Missing | `RuntimeError: function signature mismatch` | 1 / unavailable: trapped |
+| safepoint | 0 | Present | None | 2 / 2, then 3 after the final explicit collection |
+
+Both successful modes printed the actual assertions' success markers:
+
+```text
+jank -> Zig: scalar and wide result checks passed
+jank -> Zig: borrowed-buffer checks passed
+```
+
+Safepoint measurements, in bytes:
+
+| Top-level point | Collections before/after | Heap before/after | Free before/after | Used before/after |
+| --- | --- | --- | --- | --- |
+| Before launcher | 1 / 2 | 262144 / 262144 | 221184 / 233472 | 40960 / 28672 |
+| After launcher returned | 2 / 3 | 44535808 / 44535808 | 1642496 / 17502208 | 42893312 / 27033600 |
+
+The final collection made **15,859,712 bytes** available inside the collector's
+heap; the reserved heap did not shrink. The collector also printed
+`GC Warning: Heap grown by 43236 KiB while GC was disabled`, consistent with
+allocating through startup without automatic collection. The no-gc comparison
+started at heap/free/used **262144/221184/40960** and finished at
+**44535808/1757184/42778624** with collection count unchanged at 1. Static-roots
+started at the same initial sizes; it never returned for a final measurement
+and performs no explicit safepoint collections.
+
+The named first trap frame in the static-roots run was:
+
+```text
+RuntimeError: function signature mismatch
+    at startup-safepoints.wasm.jank::runtime::reduce(jank::runtime::oref<jank::runtime::object>, jank::runtime::oref<jank::runtime::object>, jank::runtime::oref<jank::runtime::object>) (wasm://wasm/startup-safepoints.wasm-027f4d82:wasm-function[4575]:0x27f966)
+```
+
+Its callers include `clojure_core$reduce_33016_3`, `jit_function::call`,
+`clojure_core$ns_publics_34302_1`, `clojure_core$refer_34330_2` and
+`jank_load_spike_core_0`. The mismatch **does not occur in no-gc mode** in this
+comparison, so this experiment does not establish a GC-independent signature
+bug. It does not trace the exact object responsible for the automatic-GC trap.
+
+Logs and results are `artifacts/logs/wasm64-startup-safepoints-*` and
+`artifacts/logs/wasm64-startup-safepoints.results`; the executable is
+`artifacts/wasm64-spike/startup-safepoints.js` plus its Wasm module.
+This shows one real linked spike completing and later reclaiming memory at a
+top-level boundary. It does **not** test resuming jank after that final
+collection, repeated workload cycles, bounded memory during a long call,
+callbacks/reentrancy, concurrency, or a general safepoint API. It neither fixes
+automatic local-root discovery nor changes production collector semantics.
 
 ## Files
 

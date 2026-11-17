@@ -53,7 +53,8 @@ namespace jtl
     linux_like,
     macos_like,
     windows_like,
-    other_unix_like
+    other_unix_like,
+    wasi
   };
 
   constexpr char const *platform_str(platform const p)
@@ -66,6 +67,8 @@ namespace jtl
         return "macos-like";
       case platform::windows_like:
         return "windows-like";
+      case platform::wasi:
+        return "wasi";
       case platform::other_unix_like:
         return "other unix-like";
       default:
@@ -83,6 +86,9 @@ namespace jtl
 #elif defined(__APPLE__) && defined(__MACH__)
   #define JANK_MACOS_LIKE
     platform::macos_like
+#elif defined(__wasi__)
+  #define JANK_WASI
+    platform::wasi
 #elif defined(unix) || defined(__unix__) || defined(__unix)
   #define JANK_OTHER_UNIX_LIKE
     platform::other_unix_like

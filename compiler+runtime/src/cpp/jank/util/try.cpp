@@ -1,7 +1,7 @@
 #include <algorithm>
 #include <regex>
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   #include <cpptrace/from_current.hpp>
   #include <cpptrace/formatting.hpp>
 #endif
@@ -16,7 +16,7 @@
 
 namespace jank::util
 {
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   /* Returns true if a frame should be kept. This allows us to trim out some pipework
    * at the start/end of each stack trace. */
   static bool filter_frame(cpptrace::stacktrace_frame const &frame)
@@ -151,6 +151,8 @@ namespace jank::util
   {
 #ifdef __EMSCRIPTEN__
     util::println(stderr, "{}\nStack traces are unsupported on Emscripten.", message);
+#elif defined(__wasi__)
+    util::println(stderr, "{}\nStack traces are unsupported on WASI.", message);
 #else
     static native_set<jtl::immutable_string> const core_libs{
       "clojure_core",
@@ -248,7 +250,7 @@ namespace jank::util
      * compilation will not have exceptions. So this helps keep our
      * compiler error output cleaner, since the stack trace isn't
      * actually going to provide any useful info. */
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     jtl::ptr<error::base> original{ e };
     auto const *deepest_trace{ original->trace.get() };
     while(original->cause)
@@ -263,6 +265,8 @@ namespace jank::util
     {
       print_exception_stack_trace(*deepest_trace);
     }
+#elif defined(__wasi__)
+    util::println(stderr, "Stack traces are unsupported on WASI.");
 #else
     util::println(stderr, "Stack traces are unsupported on Emscripten.");
 #endif

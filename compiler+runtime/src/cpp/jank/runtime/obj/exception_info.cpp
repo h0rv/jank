@@ -1,4 +1,4 @@
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   #include <cpptrace/basic.hpp>
 #endif
 
@@ -28,7 +28,7 @@ namespace jank::runtime::obj
   {
   }
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   static persistent_vector_ref frame_to_vec(cpptrace::stacktrace_frame const &frame)
   {
     runtime::detail::native_transient_vector trans;
@@ -51,7 +51,7 @@ namespace jank::runtime::obj
     runtime::detail::native_transient_hash_map trans{};
     trans.set(message_kw, make_box(e->message));
     trans.set(data_kw, e->data);
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     if(e->resolved_trace)
     {
       trans.set(at_kw, frame_to_vec(e->resolved_trace->frames.at(0)));
@@ -89,7 +89,7 @@ namespace jank::runtime::obj
       util::format_to(sb, "\n  {}", cause_to_via(cause).to_code_string());
     }
     util::format_to(sb, "]\n");
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     if(resolved_trace)
     {
       util::format_to(sb, " :trace\n [");
@@ -115,7 +115,7 @@ namespace jank::runtime::obj
 
   void exception_info::resolve()
   {
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     if(resolved_trace.get() || !raw_trace)
     {
       return;
@@ -149,7 +149,7 @@ namespace jank::runtime::obj
     trans.insert_unique(via_kw, make_box<obj::persistent_vector>(via_trans.persistent()));
 
     runtime::detail::native_transient_vector trace_trans;
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     if(resolved_trace)
     {
       for(auto const &frame : resolved_trace->frames)

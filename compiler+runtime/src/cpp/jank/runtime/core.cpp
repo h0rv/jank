@@ -5,7 +5,7 @@
 #include <cxxabi.h>
 #include <charconv>
 
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
   #include <cpptrace/basic.hpp>
 #endif
 
@@ -1356,7 +1356,7 @@ namespace jank::runtime
   ex_info(jtl::immutable_string const &message, object_ref const data, object_ref const cause)
   {
     auto const ret{ make_box<obj::exception_info>(message, data) };
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     ret->raw_trace = std::make_unique<cpptrace::raw_trace>(cpptrace::generate_raw_trace());
 #endif
     if(cause.is_some())

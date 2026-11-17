@@ -1,5 +1,5 @@
 set(jank_target_sdk_dir "lib/jank/${PROJECT_VERSION}")
-if(EMSCRIPTEN)
+if(EMSCRIPTEN OR CMAKE_SYSTEM_NAME STREQUAL "WASI")
   set_property(DIRECTORY "${zstd_SOURCE_DIR}/build/cmake" PROPERTY EXCLUDE_FROM_ALL TRUE)
 endif()
 install(FILES "${CMAKE_BINARY_DIR}/libjank-static-runtime.a"

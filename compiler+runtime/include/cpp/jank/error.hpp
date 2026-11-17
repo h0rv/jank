@@ -225,7 +225,7 @@ namespace jank::error
          jtl::immutable_string const &message,
          read::source const &source,
          runtime::object_ref const expansion);
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     base(kind k,
          jtl::immutable_string const &message,
          read::source const &source,
@@ -261,7 +261,7 @@ namespace jank::error
          read::source const &source,
          runtime::object_ref const expansion,
          jtl::ref<base> cause);
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     base(kind k,
          jtl::immutable_string const &message,
          read::source const &source,
@@ -283,7 +283,7 @@ namespace jank::error
     read::source source;
     native_vector<note> notes;
     jtl::ptr<base> cause;
-#ifndef __EMSCRIPTEN__
+#if !defined(__EMSCRIPTEN__) && !defined(__wasi__)
     std::unique_ptr<cpptrace::raw_trace> trace;
 #endif
     native_vector<candidate> candidates;

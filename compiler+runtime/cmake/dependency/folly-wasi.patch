@@ -1,0 +1,23 @@
+diff --git a/folly/SharedMutex.cpp b/folly/SharedMutex.cpp
+--- a/folly/SharedMutex.cpp
++++ b/folly/SharedMutex.cpp
+@@ -23 +23,3 @@
+-#include <folly/portability/SysResource.h>
++#if !defined(__wasi__)
++#include <folly/portability/SysResource.h>
++#endif
+@@ -58 +60 @@
+-#ifdef RUSAGE_THREAD
++#if defined(RUSAGE_THREAD) && !defined(__wasi__)
+diff --git a/folly/system/ThreadId.cpp b/folly/system/ThreadId.cpp
+--- a/folly/system/ThreadId.cpp
++++ b/folly/system/ThreadId.cpp
+@@ -51,6 +51,8 @@ uint64_t getOSThreadIDSlow() {
+   return uint64_t(tid);
+ #elif defined(__EMSCRIPTEN__)
+   return 0;
++#elif defined(__wasi__)
++  return getCurrentThreadID();
+ #else
+   return uint64_t(syscall(FOLLY_SYS_gettid));
+ #endif

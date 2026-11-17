@@ -2020,7 +2020,7 @@ Wasm support. The earlier exception-root caveats remain, including natively.
 
 ## WASI
 
-This AI-assisted Linux x86_64 experiment uses **Emscripten compiler + WASI ABI
+The original AI-assisted Linux x86_64 experiment uses **Emscripten compiler + WASI ABI
 shim + Wasmtime**, not native wasi-sdk WASI or general WASI support. The real
 jank-generated spike and unchanged `native.zig` implementation run with GC
 enabled. Ordinary unrooted startup remains broken. The tracked harness uses
@@ -2069,7 +2069,8 @@ and patched Binaryen **`a9141c8cc`** for spilling. Initial toolchain probes:
   / `UNREACHABLE ... abi/stack.h:64`, even with a named i64 `__stack_pointer`.
   The repository's private patch remains required.
 
-Representative wasi-sdk wasm32 jank compilation (nine real translation units):
+Historical wasi-sdk wasm32 jank compilation (nine real translation units,
+before the raw-reference work and the native WASI follow-up below):
 
 | Category | First observed blocker / diagnostic result |
 | --- | --- |
@@ -2080,6 +2081,116 @@ Representative wasi-sdk wasm32 jank compilation (nine real translation units):
 | cpptrace | `platform/platform.hpp:18: "Unexpected platform"`; current Emscripten runtime excludes it. |
 | Pinned bdwgc | Non-threaded `alloc.c` compiles; threaded probe hits WASI signal emulation and `No multi-threading support yet`. |
 | Isolated threads/atomics, filesystem, dlopen, setjmp, Boost multiprecision | Objects compile; not proof of linking, host capabilities, JIT availability, or a runtime port. |
+
+### Native wasm32-wasip1 runtime attempt (wasi-sdk 34)
+
+This separate AI-assisted attempt uses **wasi-sdk 34.0 targeting
+`wasm32-wasip1`**, not Emscripten, injected platform macros, or the wasm64 ABI
+shim. It stops at a real core-library compile blocker; there is **no native
+WASI jank/Zig execution result**. This supersedes the historical wasm32
+pointer-width/platform compile observations above, not the shim results.
+
+**Source inspection and bounded fixes:**
+
+- WASI is an explicit platform, with existing platform enum values preserved.
+  Executable-path discovery throws an explicit unsupported-capability error;
+  terminal size uses the existing 80x24 fallback because Preview 1 has no tty
+  size API. cpptrace is excluded as on Emscripten, while standard C++ exception
+  propagation remains in use. Native branches are unchanged.
+- CMake accepts WASI archive flags, leaves target standard include discovery
+  to the SDK, skips host LLVM's unsupported `HandleLLVMOptions` platform check,
+  and builds target zstd without the host `_GNU_SOURCE` assumption about
+  `qsort_r`. The cross-build phase-2 **dummy archive** no longer inherits the
+  host compiler's LLVM/isocline link dependencies on WASI. No nREPL/core module
+  or runtime implementation is removed.
+- A build-local Folly patch uses `pthread_self()` for the WASI thread ID and
+  the existing unavailable-context-switch-count fallback. The checked-in
+  submodule and its pin stay unchanged. Immer's atomics/spinlocks and the SDK's
+  C++ threading declarations compile without disabling their semantics.
+- BDWGC's existing WASI configuration compiles with `enable_threads=OFF` and
+  no pointer mask. No collector source patch is needed for this compile. Its
+  WASI static range is `__global_base..__heap_base`, with `STACKBOTTOM` at
+  `__global_base`; that is inspection, **not verified GC correctness**.
+  The module loader opts into the SDK's documented `_WASI_EMULATED_MMAN`
+  implementation and corresponding library, not a replacement loader stub.
+- A pre-existing pointer-format varargs mismatch exposed by the 32-bit build
+  is fixed by widening `uptr` to the `%llx` argument type. On 64-bit this is
+  the same `unsigned long long` type as before.
+
+**Reproduction:** use the documented Ubuntu 24.04 `jank-host-build` container
+with its LLVM 23.1.6/native build prerequisites and Boost 1.83 headers. From
+this directory:
+
+```sh
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh host
+for step in deps configure components eh capture; do
+  docker exec --user 1000:1000 jank-host-build bash scripts/build-wasi32-target.sh "$step"
+done
+# Expected exit 1 at the capture.jank diagnostic below:
+docker exec --user 1000:1000 jank-host-build bash scripts/build-wasi32-target.sh build
+docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
+```
+
+The new script reuses `wasi-tools.sh` pins (SDK 34.0, Wasmtime 50.0.2,
+Binaryen 133). It checksum-verifies and builds target zlib 1.3.2; host Boost
+is used only as isolated portable headers. Host LLVM/zstd discovery metadata
+does not constitute a target link. SDKs/dependencies remain in `.tools/wasi`,
+objects in `artifacts/build-wasi32`, isolated binaries in
+`artifacts/wasi-probes`, and command/error logs in
+`artifacts/logs/wasi/wasi32-*.log`.
+
+**Compile:** C/C++ use `--target=wasm32-wasip1 -fwasm-exceptions` and the
+32-bit raw references. `components` succeeds for `jank_common_lib`,
+`jank_static_lib`, `jank_lib_phase_2`, Folly, BDWGC/gctba and zstd. Generated
+`clojure.core`, string/walk and the other nREPL translation units compile.
+The complete static-runtime target stops compiling generated nREPL capture:
+
+```text
+compiler+runtime/src/jank/jank/nrepl/server/capture.jank:11:11: error: use of undeclared identifier 'mkstemp'
+   11 | auto &&v6(mkstemp(v5));
+      |           ^~~~~~~
+1 error generated.
+ninja: build stopped: cannot make progress due to previous errors.
+EXIT=1
+```
+
+The location is a generated C++ `#line` mapping back to the original jank
+source. Adding `<cstdlib>` was tried and did not fix it: the SDK's
+`stdlib.h:118` deliberately guards `mkstemp` behind
+`__wasilibc_unmodified_upstream` ("WASI has no temp directories"). That macro
+was **not** defined to bypass the guard. More importantly, `with-capture`
+also needs `dup`/`dup2` to redirect actual C stdout/stderr. An independent
+SDK/Wasmtime control establishes the deeper capability boundary:
+
+```text
+WASI capture prerequisite: dup(1)=-1 errno=58 (ENOTSUP=58)
+WASI capture prerequisite: dup2(1,1)=-1 errno=58 (ENOTSUP=58)
+EXIT=0
+```
+
+This is not resolved by an include or a temporary-name generator. Preserving
+native descriptor-level output capture would require a WASI descriptor/I/O
+capture port or a deliberate capability design. The timeboxed attempt stops
+there rather than stubbing capture or dropping nREPL from the runtime archive.
+
+**Link:** the complete runtime archive and jank/Zig application link are not
+reached. Separately, the existing isolated C++ exception fixture links with
+`-fwasm-exceptions -lunwind`; stock Binaryen 133 `--translate-to-exnref` and
+Wasmtime `-W exceptions=y` produce `C++ exception caught: 42`, exit 0. Only
+the needed Wasm features are enabled, not `--all-features` (which allowed
+Binaryen to emit compact imports rejected by default Wasmtime).
+
+**Execution:** no jank startup, Zig markers, static-root registration or
+flatten/spill runtime execution was reached. The intended next executable
+stage would register `__global_base..__data_end`, flatten/spill i32 pointers,
+translate exceptions to exnref and run with GC enabled; it is **unverified**,
+not a claimed adaptation of the Emscripten success.
+
+**Correctness:** native `jank-test` after the runtime changes reports
+**130/130 cases, 2053/2053 assertions, 0 failures**, with 870 jank files,
+9 skips and 0 failures. The isolated EH and unsupported-descriptor controls
+do not establish WASI runtime/GC, threading, filesystem or exception-lifetime
+correctness. There is no general WASI-support claim.
 
 ### Reproduce the shim route
 

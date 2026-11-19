@@ -6,6 +6,61 @@ import vm from 'node:vm';
 
 const source = readFileSync(new URL('../site/runner.js', import.meta.url), 'utf8');
 const gameSource = readFileSync(new URL('../site/flappy-bird-runner.js', import.meta.url), 'utf8');
+const appSource = readFileSync(new URL('app-index.html', import.meta.url), 'utf8');
+
+function appRunner(settings = {}) {
+  const elements = Object.fromEntries(['canvas', 'stdout', 'app'].map(id => [id, {textContent: ''}]));
+  const scripts = [];
+  const document = {
+    documentElement: {dataset: {status: 'running'}},
+    getElementById: id => elements[id],
+    createElement: () => ({}),
+    body: {appendChild: script => scripts.push(script)}
+  };
+  const context = vm.createContext({document, console, window: {addEventListener() {}}});
+  const config = {arguments: ['static-roots'], expect: ['ready'], script: 'app.js', ...settings};
+  for (const [, script] of appSource.replace('__PROJECT_CONFIG__', JSON.stringify(config))
+      .matchAll(/<script>([\s\S]*?)<\/script>/g)) vm.runInContext(script, context);
+  return {context, document, elements, script: scripts[0], options: context.Module};
+}
+
+test('generic page starts modularized factories with the original Module options', async () => {
+  for (const exportName of ['createLive', 'Module']) {
+    const page = appRunner({modularize: true, exportName});
+    let received;
+    const instance = {jankFrameStats: {frames: 3}};
+    page.context[exportName] = options => { received = options; return Promise.resolve(instance); };
+    await page.script.onload();
+    assert.equal(received, page.options);
+    assert.equal(typeof received.print, 'function');
+    assert.equal(typeof received.onExit, 'function');
+    assert.equal(page.context.Module, instance);
+  }
+});
+
+test('generic non-modularized page retains its Module and exit checks', async () => {
+  const page = appRunner({modularize: false});
+  await page.script.onload();
+  assert.equal(page.context.Module, page.options);
+  page.options.print('ready');
+  page.options.onExit(0);
+  assert.equal(page.document.documentElement.dataset.status, 'pass');
+});
+
+test('generic page reports missing factories, rejected initialization and script errors', async () => {
+  for (const factory of [undefined, () => Promise.reject(new Error('initialization failed'))]) {
+    const page = appRunner({modularize: true, exportName: 'createLive'});
+    page.context.createLive = factory;
+    await page.script.onload();
+    assert.equal(page.document.documentElement.dataset.status, 'fail');
+    assert.match(page.elements.stdout.textContent, /Missing Emscripten factory|initialization failed/);
+  }
+  const page = appRunner();
+  page.script.onerror();
+  assert.equal(page.document.documentElement.dataset.status, 'fail');
+  assert.match(page.elements.stdout.textContent, /Could not load app.js/);
+});
+
 function runner({ wasm = true, currentScript, deferred = false } = {}) {
   const elements = Object.fromEntries(['run-form', 'input', 'run', 'result', 'status', 'stats', 'stdout'].map(id =>
     [id, { textContent: '', value: ' 100 ', disabled: true, scrollTop: 0, scrollHeight: 0,

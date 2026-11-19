@@ -126,6 +126,18 @@ class DriverTests(unittest.TestCase):
                 self.assertIn(f'EM_CONFIG={driver.TOOLS / "gc-wasm/emsdk/.emscripten"}',
                               logged.call_args_list[0].args[1])
 
+    def test_raylib_provisions_missing_container_tools(self):
+        for status in (0, 1):
+            with tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(driver, 'TOOLS', pathlib.Path(directory)), \
+                    mock.patch.object(driver.subprocess, 'run', return_value=subprocess.CompletedProcess([], status)) as probe, \
+                    mock.patch.object(driver, 'logged') as logged:
+                driver.build_raylib('native')
+                self.assertIn('command -v unzip >/dev/null && command -v patch >/dev/null', probe.call_args.args[0])
+                self.assertEqual([call.args[0] for call in logged.call_args_list],
+                                 (['raylib-packages'] if status else []) + ['raylib-native'])
+                self.assertIn('exec docker exec -i', (pathlib.Path(directory) / 'app-bin/patch').read_text())
+
     def test_scaffold(self):
         with tempfile.TemporaryDirectory() as directory:
             root = pathlib.Path(directory) / 'hello-world'
@@ -461,6 +473,17 @@ class ProjectTests(unittest.TestCase):
             'command': 'em++ -O2 -MD -MT target -MF deps -o out -c /source/src/cpp/jank/runtime/context.cpp'}])
         self.assertEqual(flags, ['em++', '-O2'])
         self.assertEqual(directory, '/build')
+
+    def test_wasm_page_settings(self):
+        for flags, expected in [([], {'modularize': False, 'exportName': 'Module'}),
+                (['-sMODULARIZE=1', '-sEXPORT_NAME=createLive'],
+                 {'modularize': True, 'exportName': 'createLive'}),
+                (['-s', 'MODULARIZE', '-s', 'EXPORT_NAME="createApp"'],
+                 {'modularize': True, 'exportName': 'createApp'}),
+                (['-sMODULARIZE=1', '-sMODULARIZE=0'],
+                 {'modularize': False, 'exportName': 'Module'})]:
+            with self.subTest(flags=flags):
+                self.assertEqual(driver.wasm_page_settings(flags), expected)
 
     def test_wasm_size_modes(self):
         project = self.load()

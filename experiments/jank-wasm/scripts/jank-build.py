@@ -311,7 +311,7 @@ def prerequisites(project):
 
 
 def build_raylib(platform):
-    probe = subprocess.run(docker('bash', '-c', 'command -v unzip patch >/dev/null'),
+    probe = subprocess.run(docker('bash', '-c', 'command -v unzip >/dev/null && command -v patch >/dev/null'),
                            capture_output=True)
     if probe.returncode:
         logged('raylib-packages', docker('bash', '-c',
@@ -566,6 +566,23 @@ def wasm_compile_flags(database):
     return flags, entry['directory']
 
 
+def wasm_page_settings(flags):
+    settings = {'MODULARIZE': '0', 'EXPORT_NAME': 'Module'}
+    args = iter(flags)
+    for arg in args:
+        if arg == '-s':
+            setting = next(args, '')
+        elif arg.startswith('-s'):
+            setting = arg[2:]
+        else:
+            continue
+        name, separator, value = setting.partition('=')
+        if name in settings:
+            settings[name] = (value if separator else '1').strip('\'"')
+    return {'modularize': settings['MODULARIZE'] not in ('0', 'false', ''),
+            'exportName': settings['EXPORT_NAME']}
+
+
 def build_wasm(project, stage, modules, launcher, run):
     mode = os.environ.get('JANK_WASM_BUILD_MODE', 'Oz')
     if mode not in ('baseline', 'strip', 'Os', 'Oz', 'O3'):
@@ -643,6 +660,7 @@ def build_wasm(project, stage, modules, launcher, run):
     js.write_text("var Module = typeof Module !== 'undefined' ? Module : {};\n"
                   f'Module.arguments ??= {json.dumps(arguments)};\n' + js.read_text())
     config = json.dumps({'expect': project.expected('browser'), 'arguments': arguments,
+                         **wasm_page_settings(project.wasm_link_flags),
                          'continuous': project.wasm_check == 'spike-continuous',
                          'frame': project.frame,
                          'interactive': bool(project.frame or 'raylib' in project.libraries),

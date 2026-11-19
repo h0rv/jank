@@ -57,8 +57,6 @@ def configure():
 
 
 def build(project):
-    if project.zig is not None:
-        raise RuntimeError('This SDK accepts jank sources and the bundled C libraries only')
     if project.wasm_check != 'single':
         raise RuntimeError('Diagnostic workloads use the research build wrapper, not this SDK')
     stage = project.out / 'stage-wasm'

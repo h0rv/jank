@@ -25,10 +25,8 @@ OUT = ROOT / 'artifacts/app'
 LOGS = ROOT / 'artifacts/logs/app'
 TOOLS = ROOT / '.tools'
 CONTAINER = 'jank-host-build'
-ZIG = TOOLS / 'zig-x86_64-linux-0.17.1/zig'
 NODE = TOOLS / 'node-v26.13.1-linux-x64/bin/node'
-MARKERS = ('jank -> Zig: scalar and wide result checks passed',
-           'jank -> Zig: borrowed-buffer checks passed')
+MARKERS = ('weighted buffer: 30', 'hello: checks passed')
 PLAYWRIGHT_VERSION = '1.58.2'
 
 
@@ -84,7 +82,6 @@ class Project:
     name: str
     main: str
     jank: pathlib.Path
-    zig: pathlib.Path | None
     expectations: dict[str, tuple[str, ...]]
     wasm_check: str
     libraries: tuple[str, ...] = ()
@@ -127,7 +124,8 @@ def load_project(directory=ROOT, *, require_expect=True):
         return path
 
     jank = source('jank', 'src', True)
-    zig = source('zig', 'native.zig', False) if 'zig' in data else None
+    if 'zig' in data:
+        raise RuntimeError('Zig projects have moved to the zig-addon branch')
     raw_expect = data.get('expect', None if require_expect else [])
     if not require_expect and raw_expect == []:
         raw_expect = {target: [] for target in ('native', 'node', 'browser')}
@@ -170,7 +168,7 @@ def load_project(directory=ROOT, *, require_expect=True):
         raise RuntimeError('frame must be a qualified ns/fn var')
     if frame and mode != 'single':
         raise RuntimeError('frame cannot be combined with spike-continuous')
-    return Project(root, name, main, jank, zig, expectations, mode, libraries,
+    return Project(root, name, main, jank, expectations, mode, libraries,
                    tuple(includes), link_flags['native'], link_flags['wasm'], frame)
 
 
@@ -247,15 +245,11 @@ def prerequisites(project):
         logged('container', docker('bash', ROOT / 'scripts/setup-app-container.sh', root=True))
     ensure_submodules()
     for tool, url, archive in [
-        *([(ZIG, 'https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz', 'zig.tar.xz')]
-          if project.zig is not None else []),
         (NODE, 'https://nodejs.org/dist/v26.13.1/node-v26.13.1-linux-x64.tar.xz', 'node.tar.xz'),
     ]:
         if not tool.is_file():
             logged(archive, ['curl', '-fL', '--retry', '2', url, '-o', TOOLS / archive])
             command(docker('tar', '-xJf', TOOLS / archive, '-C', TOOLS))
-    if project.zig is not None and subprocess.check_output([ZIG, 'version'], text=True).strip() != '0.17.1':
-        raise RuntimeError('Zig must be exactly 0.17.1')
     sdk = TOOLS / 'gc-wasm/emsdk'
     if not (sdk / 'upstream/emscripten/em++').is_file() or not (sdk / '.emscripten').is_file():
         logged('emsdk', ['bash', ROOT / 'scripts/check-gc-wasm.sh', 'explicit'],
@@ -367,8 +361,6 @@ def setup_components(project, browser=False):
             ('emsdk', '7.0.0', TOOLS / 'gc-wasm/emsdk', all(
                 (TOOLS / 'gc-wasm/emsdk' / name).is_file() for name in
                 ('upstream/emscripten/em++', '.emscripten')))]
-    if project.zig is not None:
-        rows.append(('Zig', '0.17.1', ZIG, ZIG.is_file()))
     for name, path in [('host jank', 'artifacts/build-host/jank'),
                        ('host phase 1', 'artifacts/build-host/jank-phase-1'),
                        ('native runtime', 'artifacts/build-target/libjank-static-runtime.a'),
@@ -438,22 +430,13 @@ def build(app):
         if stage.exists():
             shutil.rmtree(stage)
         shutil.copytree(project.root, stage, ignore=shutil.ignore_patterns(
-            'artifacts', '.tools', '.git', 'target', 'zig-out', '.zig-cache', '__pycache__'))
-        if project.zig is not None and not (stage / 'build.zig').is_file():
-            template = (ROOT / 'scripts/project-build.zig').read_text()
-            (stage / 'build.zig').write_text(template.replace('__ZIG_ROOT__',
-                json.dumps(str(project.zig.relative_to(project.root)))).replace('__LIBRARY_NAME__',
-                json.dumps(project.name)))
-        prefix = stage / 'zig-out'
+            'artifacts', '.tools', '.git', 'target', '__pycache__'))
+        prefix = stage
         def run(label, args, **kwargs):
             cwd = kwargs.pop('cwd', stage)
             logged(f'{project.name}-{platform}-{label}', docker('env',
                 f'EM_CONFIG={TOOLS / "gc-wasm/emsdk/.emscripten"}',
-                f'ZIG_GLOBAL_CACHE_DIR={ROOT / ".zig-cache/global"}',
                 *args, workdir=cwd), **kwargs)
-        if project.zig is not None:
-            run('zig', [ZIG, 'build', '--build-file', stage / 'build.zig', '-Doptimize=ReleaseSafe',
-                        '--prefix', prefix, '--cache-dir', stage / '.zig-cache'])
         modules, launcher = generate_sources(project, stage, platform, prefix, run)
         if platform == 'native':
             build_native(project, stage, prefix, modules, launcher, run)
@@ -466,7 +449,7 @@ def build(app):
 
 def build_digest(project):
     digest = hashlib.sha256()
-    excluded = {'artifacts', '.tools', '.git', 'target', 'zig-out', '.zig-cache', '__pycache__'}
+    excluded = {'artifacts', '.tools', '.git', 'target', '__pycache__'}
     for base in dict.fromkeys([project.root, *project.include_dirs, ROOT / 'scripts', ROOT / 'sdk', ROOT / 'wasm-probe']):
         for directory, dirs, files in os.walk(base):
             dirs[:] = sorted(name for name in dirs if name not in excluded)
@@ -499,8 +482,6 @@ def generate_sources(project, stage, platform, prefix, run):
     flags.extend(f'-l{archive}' for archive in host_deps.archives)
     if 'raylib' in project.libraries:
         flags.extend(['-lGL', '-lm', '-lpthread', '-ldl', '-lrt', '-lX11'])
-    if project.zig is not None:
-        flags.extend(['-L', prefix / 'lib', f'-l:{project.name}'])
     run('modules', [*flags, '--output-target', 'cpp', 'compile-module', project.main], cwd=stage)
     # compile-module emits the transitive source dependencies while loading the entry.
     # This cache belongs to a freshly created stage, never another build or platform.
@@ -530,7 +511,7 @@ def build_native(project, stage, prefix, modules, launcher, run):
     triple = container_output('g++-14', '-dumpmachine')
     cpp = ['-nostdinc++', '-I', include / 'c++/14', '-I', include / triple / 'c++/14',
            '-I', include / 'c++/14/backward']
-    compiler = [ZIG, 'c++'] if project.zig is not None else ['/usr/lib/llvm-23/bin/clang++']
+    compiler = ['/usr/lib/llvm-23/bin/clang++']
     flags = [*compiler, '-std=c++20', '-O2', '-fPIC', '-fwrapv', '-femulated-tls', *cpp,
              '-DGC_THREADS', '-DPOINTER_MASK=0x0000FFFFFFFFFFFF', '-DIMMER_HAS_LIBGC=1',
              '-DIMMER_TAGGED_NODE=0', '-DBOOST_MP_STANDALONE=1', '-DFOLLY_HAVE_JEMALLOC=0',
@@ -546,8 +527,7 @@ def build_native(project, stage, prefix, modules, launcher, run):
     output = project.out / 'native' / project.name
     output.parent.mkdir(parents=True, exist_ok=True)
     gcc = pathlib.Path(container_output('g++-14', '-print-libgcc-file-name')).parent
-    libraries = [prefix / 'lib' / f'lib{project.name}.a'] if project.zig is not None else []
-    run('link', [*flags, '-nostdlib++', launcher, *objects, *libraries,
+    run('link', [*flags, '-nostdlib++', launcher, *objects,
                 ROOT / 'artifacts/build-target/libjank-static-runtime.a',
                 *deps.archives, *deps.link_flags,
                 f'-L{gcc}', stdlib, container_output('g++-14', '-print-file-name=libgcc_s.so'),
@@ -633,12 +613,6 @@ def build_wasm(project, stage, modules, launcher, run):
         run(f'cpp-{index}', [*flags, optimization, *(['-g'] if mode == 'baseline' else []),
                             *lto, *extra, '-c', source, '-o', obj], cwd=cwd)
         objects.append(obj)
-    if project.zig is not None:
-        zig = stage / 'kernel.o'
-        run('kernel', [ZIG, 'build-obj', stage / project.zig.relative_to(project.root),
-                      '-target', 'wasm64-freestanding', '-O', 'ReleaseSafe', f'-femit-bin={zig}',
-                      '--cache-dir', stage / '.zig-cache'])
-        objects.append(zig)
     output = project.out / 'wasm'
     output.mkdir(parents=True, exist_ok=True)
     js = output / f'{project.name}.js'

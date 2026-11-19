@@ -146,6 +146,9 @@ prints a verdict table. Logs and browser DOM evidence are in
 
 ### C libraries and interactive browser frames
 
+The [offline wasm64 SDK](SDK.md) packages the compiler and toolchain for
+Docker-free, offline project builds after extraction.
+
 Small optional `jank-build.json` additions:
 
 ```json
@@ -1093,8 +1096,8 @@ a subset of fixture paths. Logs and `results.json` go in a fresh directory under
 `artifacts/wasm64-tests/`. The runner requires Boehm to be enabled, requests
 `GC_set_free_space_divisor(1)`, and verifies explicit collections triggered
 before the first test and every eighth test thereafter. It links with Wasm
-exceptions, registers static data roots, and runs the existing post-link spill
-transform without its optional local-coalescing cleanup. The runner gives
+exceptions, registers static data roots, and pins the `legacy-no-coalesce`
+post-link spill pipeline to keep the run reproducible. The runner gives
 Node's Wasm calls a larger native stack for the parser's deep-nesting doctests.
 
 The runner compiles the original portable C++ test sources. It does not link
@@ -1132,8 +1135,8 @@ skips. The Wasm failures were 3 unexpected throws, 2 native exceptions, 1
 jank error, and 1 trap. The trapped fixture is a top-level `(recur)`: wrapping
 it in a function changes its context, so the trap is not evidence of a GC bug.
 
-Run the same existing 14-case lifetime probe against each pointer width, with
-static roots and the same spill transform:
+Run the existing 14-case lifetime probe against each pointer width, with
+static roots and the `legacy` spill pipeline (with local coalescing):
 
 ```sh
 for step in deps configure build; do
@@ -1981,6 +1984,8 @@ No runtime, collector patch, spill-slot allocation/zeroing, stack size, or GC
 policy changed. Reordering first removes unused locals before the nonlinear
 coalescing pass; the final reorder removes unused indices and favors frequent
 accesses. This deliberately does not enable a general `-O2` post-spill pipeline.
+That pipeline is now `SPILL_PIPELINE=legacy`. The default is the
+[call-graph-aware pipeline](#call-graph-aware-post-link-spill).
 
 #### Diagnosis
 
@@ -3252,6 +3257,95 @@ through supported jank interop without adding a C++ implementation.
 
 `build.zig` builds static and shared Zig libraries. `jank/src/spike/core.jank` is the Clojure caller. `scripts/` contains the reproduction commands. `wasm-probe/` contains isolated C++ callers, target-header probes and the collector test.
 
+## Call-graph-aware post-link spill
+
+AI-assisted. This changes only the post-link Binaryen step. jank codegen, the
+runtime and the object model are unchanged.
+
+`wasm-probe/spill-pointers.py` now runs a private Binaryen pass,
+`--gc-spill-pointers`, followed by `-O3`. The pass is added in
+`wasm-probe/binaryen-memory64-stack.patch`. It builds the call graph of the
+linked module and marks a function as collecting when it can reach a collector
+seed transitively:
+
+| Edge or node | Treated as |
+| --- | --- |
+| Seed (`GC_malloc*`, `GC_realloc*`, `GC_gcollect*`, `GC_generic_malloc*`, `GC_try_to_collect*`, other bdwgc entry points listed in the script) | Collecting |
+| Direct `call` | Edge to the callee |
+| `call_indirect` of signature S | Edge to every table function of signature S; S with no table function is non-collecting |
+| `call_ref` | Collecting |
+| Import not in the script's `SAFE_IMPORTS` (JS library code, raylib/GL, JSPI) | Collecting |
+| Emscripten/WASI host import in `SAFE_IMPORTS` (syscalls, clocks, `emscripten_resize_heap`, ...) | Non-collecting |
+
+Only collecting functions are flattened and spilled. Inside them, spills are
+emitted only around call sites whose target can collect. A run with no seed
+matched fails instead of skipping everything. The pass writes the names of the
+skipped functions to `<module>.nospill.txt`. `--strip-dwarf` runs first, because
+flatten and `-O3` would otherwise keep stale DWARF. The name section is kept.
+
+`SPILL_PIPELINE` selects the pipeline:
+
+| Value | Passes |
+| --- | --- |
+| `gc-aware` (default) | `--gc-spill-pointers -O3` |
+| `gc-aware-compact` | `--gc-spill-pointers` plus local compaction |
+| `legacy` | `--flatten --spill-pointers` plus local compaction (the previous default) |
+| `legacy-o3` | `--flatten --spill-pointers -O3` |
+
+If the optimizer has no `--gc-spill-pointers`, for example the stock emsdk
+`wasm-opt` that the wasm32 route sets through `SPILL_WASM_OPT`, the default
+falls back to `legacy`.
+
+Checks run in the `jank-host-build` container after a clean bootstrap:
+
+| Check | Result |
+| --- | --- |
+| `python3 wasm-probe/gc-spill-callgraph-test.py`: direct, indirect-table, mixed and callback paths | PASS; `fib`, `leaf_indirect` and `leaf_target` are skipped with zero spill stores, and the collecting paths keep theirs |
+| `spill-memory64.wat` coverage + unwind probe under `gc-aware` (`SPILL_COLLECTORS=collect`) | PASS; all six cases, catch-stack drift 0 |
+| `python3 wasm-probe/spill-compaction-test.py` (pinned to `legacy`) | PASS |
+| `build-wasm64-target.sh gc-roots`, 14 lifetime cases, spill mode | 14/14 PASS; 1,140 of 4,016 functions skipped; 6,160,766 → 2,029,744 bytes |
+| `./jank-build check` (spike, continuous GC) | native, node and browser PASS; 1,559 of 9,495 functions skipped |
+| `bench-cljc` `measure.py`, all five targets | `BENCHMARK VERDICT: PASS` |
+
+Not checked: the wasm32 route with this pass (it uses stock Binaryen and so
+stays on `legacy`), the WASI route, and the raylib/flappy-bird examples.
+
+### bench-cljc result
+
+All four variants below come from the same `unsafe.wasm` link. Each one was
+run 7 times in interleaved order. The table gives the median of the per-run
+warm medians in ms (each run has 10 samples). The no-spill, GC-off control in
+the same session measured fib27 at 2.817 ms.
+
+| Kernel | legacy | legacy-o3 | gc-aware-compact | gc-aware (default) |
+| --- | ---: | ---: | ---: | ---: |
+| fib27 | 82.020 | 82.500 | 79.829 | 81.685 |
+| vector100k | 70.647 | 70.015 | 66.715 | 69.206 |
+| map100k | 180.205 | 176.860 | 174.350 | 165.757 |
+| lazy100k | 77.319 | 76.696 | 74.597 | 72.934 |
+| strings1k | 2.119 | 1.941 | 1.921 | 1.827 |
+| sort5k | 14.360 | 13.673 | 13.410 | 13.647 |
+| Wasm bytes | 19,797,018 | 10,096,813 | 12,463,494 | 8,166,800 |
+| Transform s | 274.2 | 22.8 | 224.6 | 38.7 |
+
+The fib27 spill overhead is unchanged: it is still about 96% of the kernel's
+time. The call graph cannot remove it, because `bench_core$fib_143_1` is
+collecting. Clang inlines jank's generic `+`, `-` and `<` into it, together
+with their big-integer, ratio and real slow paths. Those paths call
+`jank::runtime::make_box`, which reaches `GC_malloc_atomic`. They also contain
+`__cxa_allocate_exception` throw paths. The recursive self-calls are collecting
+call sites as well. A sound whole-module analysis therefore has to flatten and
+spill fib. Removing this cost needs either unboxed arithmetic fast paths that
+stay separate from the allocating slow paths (a codegen change, outside this
+work) or a Binaryen pass that splits cold paths out before spilling.
+
+Across the other kernels, `gc-aware` is 2–14% faster than `legacy`. The module
+is 59% smaller and the transform is 7× faster. Most of that comes from
+skipping flatten in the 16% of functions that cannot collect, plus `-O3`.
+`legacy-o3` alone recovers most of the size but little of the speed. One full
+`measure.py` run recorded a 96.6 ms fib27 for `gc-aware`. The interleaved runs
+ranged from 80.4 to 98.5 ms, so that single figure is run-to-run variance.
+
 ## Shared ClojureScript / native / wasm64 benchmark
 
 The AI-assisted [bench-cljc report](examples/bench-cljc/REPORT.md) compares six
@@ -3262,6 +3356,10 @@ repository root:
 ```sh
 python3 -B experiments/zig-wasm/examples/bench-cljc/measure.py
 ```
+
+`wasm64-spill` uses the default call-graph-aware spill pipeline;
+`wasm64-spill-legacy` transforms the same link with `SPILL_PIPELINE=legacy`
+(see [call-graph-aware post-link spill](#call-graph-aware-post-link-spill)).
 
 The driver bootstraps through jank-build and writes JSON (including ten samples
 per kernel), Markdown tables and logs under ignored `artifacts/bench-cljc/`.

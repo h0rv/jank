@@ -3,11 +3,15 @@
 # on exceptional exit as well. Existing delegates to the caller must enter the
 # new cleanup handler rather than bypass it. Zero fresh reservations when bulk
 # memory is available so unused slots do not conservatively retain old objects.
-# Spilling/liveness is unchanged; flattening is a separate prerequisite.
+# Add gc-spill-pointers: a call-graph-aware wrapper that flattens and spills
+# only functions that can transitively reach a collector seed, and spills only
+# around call sites that can reach one (spill-pointers itself is unchanged).
 diff --git a/src/abi/stack.h b/src/abi/stack.h
 --- a/src/abi/stack.h
 +++ b/src/abi/stack.h
-@@ -20,6 +20,8 @@
+@@ -18,8 +18,10 @@
+ #define wasm_abi_stack_h
+ 
  #include "asmjs/shared-constants.h"
 +#include "ir/branch-utils.h"
  #include "ir/find_all.h"
@@ -16,7 +20,8 @@ diff --git a/src/abi/stack.h b/src/abi/stack.h
  #include "shared-constants.h"
  #include "wasm-builder.h"
  #include "wasm-emscripten.h"
-@@ -61,5 +63,10 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
+@@ -60,17 +62,32 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
+       builder.makeBinary(SubInt32,
                           builder.makeGlobalGet(stackPointer->name, pointerType),
                           builder.makeConst(int32_t(size)));
 +  } else if (pointerType == Type::i64) {
@@ -27,7 +32,7 @@ diff --git a/src/abi/stack.h b/src/abi/stack.h
    } else {
      WASM_UNREACHABLE("unhandled pointerType");
    }
-@@ -67,10 +74,20 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
+   block->list.push_back(builder.makeGlobalSet(
      stackPointer->name, builder.makeLocalTee(local, added, pointerType)));
 +  if (wasm.features.hasBulkMemory()) {
 +    block->list.push_back(builder.makeMemoryFill(
@@ -50,7 +55,7 @@ diff --git a/src/abi/stack.h b/src/abi/stack.h
    };
    // add stack restores to the returns
    FindAllPointers<Return> finder(func->body);
-@@ -115,4 +132,20 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
+@@ -107,6 +124,22 @@ getStackSpace(Index local, Function* func, Index size, Module& wasm) {
    }
    block->finalize();
    func->body = block;
@@ -71,3 +76,278 @@ diff --git a/src/abi/stack.h b/src/abi/stack.h
 +      {builder.makeSequence(makeStackRestore(), builder.makeRethrow(name))});
 +  }
  }
+ 
+ } // namespace ABI
+diff --git a/src/passes/SpillPointers.cpp b/src/passes/SpillPointers.cpp
+--- a/src/passes/SpillPointers.cpp
++++ b/src/passes/SpillPointers.cpp
+@@ -24,10 +24,28 @@
+ //
+ //  * There is currently no check that there is enough stack space.
+ //
++// gc-spill-pointers (private jank patch) runs flatten + spill-pointers only in
++// functions that can transitively reach a collector seed, and only around call
++// sites that can. Indirect calls resolve by signature to table functions;
++// call_ref, unresolved signatures and imports not marked safe are assumed to
++// collect. This assumes JS does not add functions to the table at runtime.
++//
++//   --pass-arg=gc-spill-pointers-collectors@GC_malloc*,GC_gcollect*,...
++//   --pass-arg=gc-spill-pointers-safe-imports@wasi_snapshot_preview1.*,...
++//   --pass-arg=gc-spill-pointers-report@path (non-collecting function names)
++//
++
++#include <fstream>
++#include <iostream>
+ 
+ #include "abi/stack.h"
+ #include "cfg/liveness-traversal.h"
++#include "ir/element-utils.h"
++#include "ir/find_all.h"
++#include "ir/module-utils.h"
+ #include "pass.h"
++#include "passes/pass-utils.h"
++#include "support/string.h"
+ #include "wasm-builder.h"
+ #include "wasm.h"
+ 
+@@ -40,8 +58,18 @@ struct SpillPointers
+   // Adds writes to memory.
+   bool addsEffects() override { return true; }
+ 
++  // Callees and indirect signatures that cannot reach a collection; calls to
++  // them need no spills.
++  const std::unordered_set<Name>* noCollectFuncs = nullptr;
++  const std::unordered_set<HeapType>* noCollectTypes = nullptr;
++
++  SpillPointers() = default;
++  SpillPointers(const std::unordered_set<Name>* noCollectFuncs,
++                const std::unordered_set<HeapType>* noCollectTypes)
++    : noCollectFuncs(noCollectFuncs), noCollectTypes(noCollectTypes) {}
++
+   std::unique_ptr<Pass> create() override {
+-    return std::make_unique<SpillPointers>();
++    return std::make_unique<SpillPointers>(noCollectFuncs, noCollectTypes);
+   }
+ 
+   // a mapping of the pointers to all the spillable things. We need to know
+@@ -63,8 +91,16 @@ struct SpillPointers
+     actualPointers[pointer] = pointer;
+   }
+ 
+-  void visitCall(Call* curr) { visitSpillable(curr); }
+-  void visitCallIndirect(CallIndirect* curr) { visitSpillable(curr); }
++  void visitCall(Call* curr) {
++    if (!noCollectFuncs || !noCollectFuncs->contains(curr->target)) {
++      visitSpillable(curr);
++    }
++  }
++  void visitCallIndirect(CallIndirect* curr) {
++    if (!noCollectTypes || !noCollectTypes->contains(curr->heapType)) {
++      visitSpillable(curr);
++    }
++  }
+ 
+   // main entry point
+ 
+@@ -207,6 +243,176 @@ struct SpillPointers
+   }
+ };
+ 
++struct GCSpillPointers : public Pass {
++  bool addsEffects() override { return true; }
++  bool invalidatesDWARF() override { return true; }
++
++  struct Calls {
++    std::unordered_set<Name> direct;
++    std::unordered_set<HeapType> indirect;
++    bool unknown = false;
++  };
++
++  std::vector<std::string> patterns(const std::string& key) {
++    std::vector<std::string> out;
++    for (auto& item : String::Split(getArgumentOrDefault(key, ""), ",")) {
++      if (!item.empty()) {
++        out.push_back(item);
++      }
++    }
++    return out;
++  }
++
++  static bool matches(const std::vector<std::string>& patterns,
++                      const std::string& value) {
++    for (auto& pattern : patterns) {
++      if (String::wildcardMatch(pattern, value)) {
++        return true;
++      }
++    }
++    return false;
++  }
++
++  void run(Module* module) override {
++    auto collectors = patterns("gc-spill-pointers-collectors");
++    auto safeImports = patterns("gc-spill-pointers-safe-imports");
++    if (collectors.empty()) {
++      Fatal() << "gc-spill-pointers: pass gc-spill-pointers-collectors";
++    }
++
++    ModuleUtils::ParallelFunctionAnalysis<Calls> analysis(
++      *module, [&](Function* func, Calls& calls) {
++        if (func->imported()) {
++          return;
++        }
++        for (auto* call : FindAll<Call>(func->body).list) {
++          calls.direct.insert(call->target);
++        }
++        for (auto* call : FindAll<CallIndirect>(func->body).list) {
++          calls.indirect.insert(call->heapType);
++        }
++        calls.unknown = !FindAll<CallRef>(func->body).list.empty();
++      });
++
++    std::unordered_map<HeapType, std::vector<Name>> tableFuncs;
++    std::unordered_set<Name> inTable;
++    ElementUtils::iterAllElementFunctionNames(module, [&](Name name) {
++      if (inTable.insert(name).second) {
++        tableFuncs[module->getFunction(name)->type.getHeapType()].push_back(
++          name);
++      }
++    });
++
++    std::unordered_map<Name, std::vector<Name>> directCallers;
++    std::unordered_map<HeapType, std::vector<Name>> indirectCallers;
++    std::unordered_set<Name> mayCollect;
++    std::unordered_set<HeapType> collectingTypes;
++    std::vector<Name> work;
++    auto mark = [&](Name name) {
++      if (mayCollect.insert(name).second) {
++        work.push_back(name);
++      }
++    };
++    Index seeds = 0;
++    for (auto& [func, calls] : analysis.map) {
++      if (matches(collectors, func->name.toString())) {
++        seeds++;
++        mark(func->name);
++      } else if (func->imported() &&
++                 !matches(safeImports,
++                          func->module.toString() + "." +
++                            func->base.toString())) {
++        mark(func->name);
++      }
++      if (calls.unknown) {
++        mark(func->name);
++      }
++      for (auto callee : calls.direct) {
++        directCallers[callee].push_back(func->name);
++      }
++      for (auto type : calls.indirect) {
++        indirectCallers[type].push_back(func->name);
++        if (!tableFuncs.contains(type)) {
++          collectingTypes.insert(type);
++          mark(func->name);
++        }
++      }
++    }
++    if (seeds == 0) {
++      Fatal() << "gc-spill-pointers: no function matches the collector "
++                 "patterns (are function names preserved?)";
++    }
++    while (!work.empty()) {
++      auto name = work.back();
++      work.pop_back();
++      if (auto it = directCallers.find(name); it != directCallers.end()) {
++        for (auto caller : it->second) {
++          mark(caller);
++        }
++      }
++      if (inTable.contains(name)) {
++        auto type = module->getFunction(name)->type.getHeapType();
++        if (collectingTypes.insert(type).second) {
++          if (auto it = indirectCallers.find(type);
++              it != indirectCallers.end()) {
++            for (auto caller : it->second) {
++              mark(caller);
++            }
++          }
++        }
++      }
++    }
++
++    std::unordered_set<Name> noCollectFuncs;
++    std::unordered_set<HeapType> noCollectTypes;
++    PassUtils::FuncSet relevant;
++    Index defined = 0;
++    std::vector<std::string> skipped;
++    for (auto& func : module->functions) {
++      if (mayCollect.contains(func->name)) {
++        if (!func->imported()) {
++          defined++;
++          relevant.insert(func.get());
++        }
++      } else {
++        noCollectFuncs.insert(func->name);
++        if (!func->imported()) {
++          defined++;
++          skipped.push_back(func->name.toString());
++        }
++      }
++    }
++    for (auto& [type, names] : tableFuncs) {
++      if (!collectingTypes.contains(type)) {
++        noCollectTypes.insert(type);
++      }
++    }
++    std::cerr << "gc-spill-pointers: defined-functions=" << defined
++              << " transformed=" << relevant.size()
++              << " skipped=" << skipped.size() << " seeds=" << seeds
++              << " indirect-types=" << tableFuncs.size()
++              << " non-collecting-indirect-types=" << noCollectTypes.size()
++              << "\n";
++    auto report = getArgumentOrDefault("gc-spill-pointers-report", "");
++    if (!report.empty()) {
++      std::sort(skipped.begin(), skipped.end());
++      std::ofstream out(report);
++      for (auto& name : skipped) {
++        out << name << "\n";
++      }
++    }
++
++    PassUtils::FilteredPassRunner runner(module, relevant, getPassOptions());
++    runner.add("flatten");
++    runner.add(
++      std::make_unique<SpillPointers>(&noCollectFuncs, &noCollectTypes));
++    runner.setIsNested(true);
++    runner.run();
++  }
++};
++
+ Pass* createSpillPointersPass() { return new SpillPointers(); }
+ 
++Pass* createGCSpillPointersPass() { return new GCSpillPointers(); }
++
+ } // namespace wasm
+diff --git a/src/passes/pass.cpp b/src/passes/pass.cpp
+--- a/src/passes/pass.cpp
++++ b/src/passes/pass.cpp
+@@ -536,6 +536,10 @@ void PassRegistry::registerPasses() {
+   registerPass("souperify-single-use",
+                "emit Souper IR in text form (single-use nodes only)",
+                createSouperifySingleUsePass);
++  registerPass("gc-spill-pointers",
++               "flatten and spill pointers only where a collection is "
++               "reachable (private jank patch)",
++               createGCSpillPointersPass);
+   registerPass("spill-pointers",
+                "spill pointers to the C stack (useful for Boehm-style GC)",
+                createSpillPointersPass);
+diff --git a/src/passes/passes.h b/src/passes/passes.h
+--- a/src/passes/passes.h
++++ b/src/passes/passes.h
+@@ -179,6 +179,7 @@ Pass* createSimplifyLocalsNoTeeNoStructurePass();
+ Pass* createSouperifyPass();
+ Pass* createSouperifySingleUsePass();
+ Pass* createSpillPointersPass();
++Pass* createGCSpillPointersPass();
+ Pass* createStackCheckPass();
+ Pass* createStringGatheringPass();
+ Pass* createStringLiftingPass();

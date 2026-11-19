@@ -142,9 +142,10 @@ async function build(directory, objects, name) {
     '-sENVIRONMENT=node', '-sEXIT_RUNTIME=1', '-sNODERAWFS=1',
     ...objects, runtime, '-o', js], join(directory, name + '-link.log'));
   if (failed(link)) return { status: failureKind(link, 'link-error') };
-  const transform = await docker(['BINARYEN_CORES=' + Math.min(jobs, 6), 'python3',
+  const transform = await docker(['BINARYEN_CORES=' + Math.min(jobs, 6),
+    'SPILL_PIPELINE=legacy-no-coalesce', 'python3',
     join(root, 'wasm-probe/spill-pointers.py'), root, join(directory, name + '.wasm'),
-    '--no-coalesce'], join(directory, name + '-spill.log'),
+  ], join(directory, name + '-spill.log'),
   { timeout: 300_000 });
   if (failed(transform)) return { status: failureKind(transform, 'spill-error') };
   return { js };

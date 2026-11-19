@@ -125,8 +125,10 @@ for mode in (['host', 'default', 'static-roots', 'asyncify', 'spill', 'shadow']
         code, _ = run(mode + '-link', link + ['-o', exe])
         if not code and spilling:
             stage = 'transform'
-            code, _ = run(mode + '-transform', [sys.executable, root / 'wasm-probe/spill-pointers.py',
-                                              root, exe.with_suffix('.wasm')])
+            pipeline = ['env', 'SPILL_PIPELINE=legacy'] if width is not None else []
+            code, _ = run(mode + '-transform', [*pipeline, sys.executable,
+                                               root / 'wasm-probe/spill-pointers.py',
+                                               root, exe.with_suffix('.wasm')])
     statuses = []
     for case in cases:
         status = 'FAIL'

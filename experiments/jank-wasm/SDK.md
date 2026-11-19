@@ -42,7 +42,9 @@ Static-root registration is generated and linked automatically. The common
 entry disables collection while jank executes and collects at empty-stack
 safepoints; configured browser frames retain the collection cadence and stats
 API. Synchronous raylib applications use the separate prebuilt loop adapter.
-The driver applies the experimental flatten/spill post-link pass internally.
+The driver applies the experimental spill transform by default. A synchronous
+single-threaded `frame` project can opt out with
+[`"wasm": {"gc": "between-frames"}`](README.md#c-libraries-and-interactive-browser-frames).
 
 Limits: wasm64 only; Chrome/Node must support memory64 and Wasm exceptions
 (synchronous browser loops also require JSPI). This is the experimental

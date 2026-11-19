@@ -79,3 +79,24 @@ starting, held/released Space, scrolling, runtime errors and frame cadence.
 Full playthroughs, long-duration memory behavior and non-Chrome browsers
 remain unverified. This is a fork-only browser integration, not an upstream
 supported browser release.
+
+## Between-frame GC
+
+The default browser build still uses JSPI and the spill pass. The separate
+AI-assisted experiment driver uses the vendored game's state transitions and
+rendering unchanged, but stores the state in a rooted var and returns from
+each frame to Emscripten instead of suspending inside the original loop.
+Use the original example above for native play.
+
+```sh
+# From experiments/jank-wasm
+bash examples/flappy-bird/build-frame-loop.sh
+./jank-build serve artifacts/frame-gc/flappy-frame-between-frames
+node scripts/measure-flappy-gc.mjs artifacts/app/flappy-frame-between-frames/wasm/flappy-frame-between-frames.js
+STRESS=1 PLAY_SECONDS=60 STARTUP_RUNS=1 node scripts/measure-flappy-gc.mjs \
+  artifacts/app/flappy-frame-between-frames/wasm/flappy-frame-between-frames.js
+```
+
+Pass `spill` to `build-frame-loop.sh` to build the same returning-frame driver
+with the spill transform. The Chrome harness sets 30 frames between collections
+for both returning variants unless `COLLECT_EVERY` is set.

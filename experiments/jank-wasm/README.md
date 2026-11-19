@@ -227,6 +227,23 @@ cadence comparisons; `Module.jankFrameStats` exposes frames, collections,
 GC heap/used bytes and linear memory bytes for bounded measurements.
 This remains an experimental rooting strategy, not general Wasm GC support.
 
+For a single-threaded project whose initializer and every frame return
+synchronously, set `"wasm": {"gc": "between-frames"}` alongside `frame` to skip
+the spill pass entirely. The default, `"gc": "spill"`, is unchanged.
+In the opt-in build, Emscripten does the normal release optimization at link
+time; the patched Binaryen is not needed. The driver disables collection before
+normal C++ initialization, runs a full collection after the initializer and
+every 30 frames by default, and invokes finalizers with collection disabled.
+Set `Module.jankCollectEvery = 1` before startup to stress the boundary.
+
+The opt-in is a root ownership contract: the app must not suspend, start
+threads, or enable GC itself; references that survive a frame must live in
+GC-visible static roots or scanned heap, not hidden in JavaScript or Wasm
+locals. A JSPI yield leaves live Wasm frames and is **not** this safepoint.
+A long initializer or frame (such as a whole `fib27` computation) can grow
+the heap until it returns, because allocation cannot trigger collection.
+See the [Flappy Bird frame-loop experiment](examples/flappy-bird/README.md#between-frame-gc).
+
 The page provides a focusable canvas, initially 1280×800; `InitWindow` sets the
 actual application size. Click the canvas to refocus keyboard input. Main
 returning is not a completion verdict. Interactive apps use `build` + `serve`

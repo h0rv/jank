@@ -2,6 +2,7 @@
 """AI-assisted driver regression tests; no SDK or browser needed."""
 import importlib.util
 import pathlib
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -101,6 +102,14 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(project.include_dirs, ())
         self.assertIsNone(project.frame)
 
+    def test_sdk_optional_expectations(self):
+        del self.config['expect']
+        (self.root / 'jank-build.json').write_text(driver.json.dumps(self.config))
+        project = driver.load_project(self.root, require_expect=False)
+        self.assertEqual(project.expected('browser'), ())
+        with self.assertRaises(RuntimeError):
+            driver.load_project(self.root)
+
     def test_c_library_options(self):
         self.config.update(libraries=['raylib'], include_dirs=['src'],
                            native={'link_flags': ['-lm']}, wasm={'link_flags': ['-sASSERTIONS=1']},
@@ -165,8 +174,14 @@ class ProjectTests(unittest.TestCase):
                 self.assertIn(f'-sEXIT_RUNTIME={0 if frame else 1}', link)
                 self.assertIn('-sUSE_GLFW=3', link)
                 self.assertIn('-sASSERTIONS=1', link)
-                cpp = [args for label, args in calls if label.startswith('cpp')][-1]
-                self.assertTrue(any(str(arg).endswith('frame-driver.cpp' if frame else 'raylib-loop-driver.cpp') for arg in cpp))
+                entry = next(args for label, args in calls if label == 'entry')
+                self.assertTrue(any(str(arg).endswith('wasm-entry.cpp' if frame else 'raylib-loop-driver.cpp') for arg in entry))
+                self.assertIn(target / ('libjank-wasm-entry.a' if frame else 'libjank-wasm-raylib-entry.a'), link)
+                if frame:
+                    self.assertIn('"hello.core"', (self.root / 'wasm-config.cpp').read_text())
+                    self.assertIn('"frame"', (self.root / 'wasm-config.cpp').read_text())
+                roots = (self.root / 'wasm-roots.cpp').read_text()
+                self.assertIn('GC_add_roots(&__global_base, &__data_end)', roots)
                 self.assertEqual('-sJSPI=1' in link, not bool(frame))
                 self.assertEqual('-Wl,--wrap=EndDrawing' in link, not bool(frame))
                 self.assertIn('"interactive": true', page)
@@ -277,6 +292,87 @@ class ProjectTests(unittest.TestCase):
             'command': 'em++ -O2 -MD -MT target -MF deps -o out -c /source/src/cpp/jank/runtime/context.cpp'}])
         self.assertEqual(flags, ['em++', '-O2'])
         self.assertEqual(directory, '/build')
+
+    def test_wasm_size_modes(self):
+        project = self.load()
+        scripts = self.root / 'scripts'
+        scripts.mkdir()
+        (scripts / 'app-index.html').write_text('__PROJECT_CONFIG__')
+        target = self.root / 'artifacts/build-wasm64'
+        target.mkdir(parents=True)
+        (target / 'compile_commands.json').write_text(driver.json.dumps([{
+            'file': '/source/src/cpp/jank/runtime/context.cpp', 'directory': '/build',
+            'command': 'em++ -O2 -c /source/src/cpp/jank/runtime/context.cpp'}]))
+        calls = {}
+
+        def run(label, args, **kwargs):
+            calls[label] = args
+            if label == 'link':
+                args[-1].write_text('var Module = {};')
+
+        for mode in (None, 'baseline', 'strip', 'Os', 'Oz', 'O3'):
+            env = {'JANK_WASM_LTO': '1'}
+            if mode is not None:
+                env['JANK_WASM_BUILD_MODE'] = mode
+                env['JANK_WASM_APP_OPT'] = '-Os'
+            with self.subTest(mode=mode), mock.patch.dict(driver.os.environ, env, clear=True), \
+                    mock.patch.object(driver, 'ROOT', self.root), \
+                    mock.patch.object(driver, 'OUT', self.root / 'out'):
+                driver.build_wasm(project, self.root, [], self.root / 'main.cpp', run)
+            self.assertIn('-Os', calls['cpp-0'])
+            self.assertIn('-flto', calls['cpp-0'])
+            self.assertIn('-flto', calls['link'])
+            self.assertEqual('-g' in calls['cpp-0'], mode == 'baseline')
+            self.assertEqual('--profiling-funcs' in calls['link'], mode == 'baseline')
+            self.assertEqual('-g2' in calls['link'], mode != 'baseline')
+            self.assertEqual(calls['spill'][-1], mode or 'Oz')
+
+    def test_invalid_wasm_size_options(self):
+        for variable, value in [('JANK_WASM_BUILD_MODE', ''), ('JANK_WASM_BUILD_MODE', 'bad'),
+                                ('JANK_WASM_APP_OPT', ''), ('JANK_WASM_APP_OPT', '-O0')]:
+            with self.subTest(variable=variable, value=value), \
+                    mock.patch.dict(driver.os.environ, {variable: value}):
+                with self.assertRaises(ValueError):
+                    driver.build_wasm(None, None, None, None, None)
+
+    def test_spill_post_pass_order(self):
+        root = self.root
+        optimizer = root / 'artifacts/build-binaryen/bin/wasm-opt'
+        optimizer.parent.mkdir(parents=True)
+        optimizer.touch()
+        wasm = root / 'input.wasm'
+        wasm.write_bytes(b'wasm')
+        script = driver.ROOT / 'wasm-probe/spill-pointers.py'
+        for mode in ('baseline', 'strip', 'Os', 'Oz', 'O3'):
+            calls = []
+
+            def transform(args, **kwargs):
+                calls.append(args)
+                pathlib.Path(args[-1]).write_bytes(b'transformed')
+
+            with self.subTest(mode=mode), mock.patch.object(sys, 'argv', [str(script), str(root), str(wasm), mode]), \
+                    mock.patch.object(subprocess, 'run', side_effect=transform):
+                runpy.run_path(str(script), run_name='__main__')
+            self.assertIn('--spill-pointers', calls[0])
+            self.assertIn('-g', calls[0])
+            self.assertEqual(len(calls), 1 if mode == 'baseline' else 2)
+            if mode != 'baseline':
+                self.assertIn('--strip-debug', calls[1])
+                self.assertNotIn('--spill-pointers', calls[1])
+                self.assertNotIn('-g', calls[1])
+                if mode != 'strip':
+                    self.assertIn('--dce', calls[1])
+                    self.assertIn(f'-{mode}', calls[1])
+
+    def test_invalid_spill_mode(self):
+        script = driver.ROOT / 'wasm-probe/spill-pointers.py'
+        for mode in ('', 'bad'):
+            with self.subTest(mode=mode), \
+                    mock.patch.object(sys, 'argv', [str(script), str(self.root), str(self.root / 'input.wasm'), mode]), \
+                    mock.patch.object(subprocess, 'run') as run:
+                with self.assertRaisesRegex(SystemExit, 'Expected baseline'):
+                    runpy.run_path(str(script), run_name='__main__')
+                run.assert_not_called()
 
     def test_dom_output(self):
         page = driver.PageResult()

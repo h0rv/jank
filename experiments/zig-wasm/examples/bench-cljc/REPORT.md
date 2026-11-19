@@ -306,3 +306,130 @@ kernels gain 2–14%, the module shrinks from 19.8 MB to 8.2 MB, and the
 transform drops from 274 s to 39 s. Details, the `legacy-o3` and
 `gc-aware-compact` controls, and the validation matrix are in
 [call-graph-aware post-link spill](../../README.md#call-graph-aware-post-link-spill).
+
+## wasm32 and MEMORY64=2: three-run comparison
+
+AI-assisted experiment using Emscripten 7.0.0, Node v24.22.2 and an Intel
+Xeon host (8 logical CPUs reported). No compiler/runtime sources were changed.
+
+### Source inspection
+
+`JANK_NAN_BOXING` is enabled only with 8-byte pointers. wasm32 therefore
+uses the existing non-NaN-boxed representation, including heap-boxed numbers;
+wasm32/wasm64 timings do not isolate memory64 bounds-check cost. MEMORY64=2
+and MEMORY64=1 reuse the same wasm64 C++ objects/archive and NaN-boxed layout:
+this is the layout-matched comparison, though lowering and engine optimization
+still prevent attributing all differences solely to bounds checks.
+
+### Compile
+
+Native, wasm32 and wasm64 application/runtime artifacts were built previously.
+The wasm32 runtime uses `WASM_BITS=32`; its deps/configure/build wall time was
+112.610 seconds. Mode 2 reuses wasm64 compilation and its static runtime
+archive, rather than recompiling with wasm32 pointers. These three measurements
+reuse the artifacts with `--skip-build`; they are not build-time measurements.
+
+### Link and transform
+
+Wasm links use `-O2`, Wasm exceptions, growable memory and a 4 MiB stack.
+Spill variants enable GC and register static roots; unsafe variants disable GC
+and omit spilling. wasm32 uses stock Binaryen flatten/spill/local compaction;
+wasm64 uses the existing patched memory64 spill pipeline.
+
+Mode 2 obtains JS glue from a `-sMEMORY64=2` link and an unlowered module
+from the otherwise equivalent `-sMEMORY64=1` link. The patched
+flatten/spill/reorder-locals/coalesce-locals/reorder-locals pipeline runs on
+the unlowered module, before stock Binaryen `--memory64-lowering` and
+`--table64-lowering`. The lowering invocation uses Emscripten's explicit
+feature flags, `--zero-filled-memory` and
+`--pass-arg=directize-initial-contents-immutable`, captured from its verbose
+link command. The lowered module is paired with mode-2 glue.
+
+`scripts/verify-bench-mem2.py` verifies memory32 output from memory64 input
+and checks import/export signatures against the mode-2 reference (22 imports,
+11 exports). Both variants passed. Spill operation counts survive lowering
+unchanged and exceed the unspilled baseline:
+
+| Operation | wasm64-spill and mode-2-spill | Unsafe baseline |
+| --- | ---: | ---: |
+| i64 stores | 804276 | 47091 |
+| memory.fill | 8658 | 933 |
+| stack-pointer sets | 52394 | 30839 |
+
+Uncompressed Wasm sizes, retaining debug/name metadata and excluding JS glue:
+
+| Target | Bytes |
+| --- | ---: |
+| wasm64-spill | 19797053 |
+| wasm64-unsafe | 11682423 |
+| wasm32-spill | 16615870 |
+| wasm32-unsafe | 10131770 |
+| wasm64-mem2-spill | 20246330 |
+| wasm64-mem2-unsafe | 11312694 |
+
+### Execution
+
+Three sequential seven-target invocations used the same artifacts. Run 1 is
+the preceding mode-2 measurement; runs 2 and 3 repeat the command below.
+All 21 target executions exited 0; each invocation printed
+`BENCHMARK VERDICT: PASS`.
+
+```sh
+python3 -B experiments/zig-wasm/examples/bench-cljc/measure.py --skip-build \
+  --targets native wasm64-spill wasm64-unsafe wasm32-spill wasm32-unsafe \
+  wasm64-mem2-spill wasm64-mem2-unsafe
+```
+
+Each cell is the median of three per-run warm medians in milliseconds,
+followed by their [minimum–maximum]. Each per-run median uses ten samples
+after the first invocation. This spread is not a confidence interval.
+
+| Kernel | Native | wasm64 spill | wasm64 unsafe | wasm32 spill | wasm32 unsafe | mem2 spill | mem2 unsafe |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| fib27 | 1.284 [1.194–1.284] | 81.664 [78.961–83.293] | 3.226 [3.138–3.833] | 21.011 [20.642–21.677] | 21.368 [20.527–24.917] | 81.748 [81.656–85.155] | 2.626 [2.545–3.411] |
+| vector100k | 16.650 [15.961–21.583] | 50.413 [47.150–52.691] | 27.475 [26.834–28.892] | 19.741 [19.688–23.595] | 20.929 [20.508–21.324] | 47.102 [45.226–50.318] | 27.457 [26.188–27.763] |
+| map100k | 56.363 [51.475–61.916] | 116.961 [108.090–117.055] | 87.429 [84.721–93.781] | 162.378 [138.823–162.642] | 68.481 [68.481–70.669] | 106.610 [102.526–115.432] | 88.837 [85.630–91.315] |
+| lazy100k | 11.838 [11.666–13.145] | 60.026 [55.566–62.048] | 27.825 [27.011–32.543] | 27.199 [26.123–28.404] | 38.276 [37.893–38.638] | 59.422 [54.969–60.155] | 28.083 [26.344–28.598] |
+| strings1k | 0.296 [0.294–0.377] | 1.624 [1.569–1.739] | 1.135 [1.018–1.135] | 0.734 [0.711–0.773] | 0.946 [0.920–0.964] | 1.553 [1.407–1.635] | 1.025 [1.011–1.051] |
+| sort5k | 1.840 [1.807–2.173] | 11.550 [11.043–12.082] | 5.601 [5.521–6.319] | 3.779 [3.714–3.805] | 5.531 [5.429–5.568] | 10.999 [10.345–11.403] | 5.911 [5.891–5.984] |
+
+Ratios divide the unrounded three-run medians above; below 1 means the
+numerator target took less time. These are not medians of paired-run ratios.
+
+| Kernel | mem2/wasm64 spill | mem2/wasm64 unsafe | wasm32/wasm64 spill | wasm32/wasm64 unsafe |
+| --- | ---: | ---: | ---: | ---: |
+| fib27 | 1.001× | 0.814× | 0.257× | 6.624× |
+| vector100k | 0.934× | 0.999× | 0.392× | 0.762× |
+| map100k | 0.911× | 1.016× | 1.388× | 0.783× |
+| lazy100k | 0.990× | 1.009× | 0.453× | 1.376× |
+| strings1k | 0.956× | 0.904× | 0.452× | 0.834× |
+| sort5k | 0.952× | 1.055× | 0.327× | 0.987× |
+
+### Correctness
+
+All three runs passed all six checksums, success/sample validation and GC
+markers: `gc-disabled=0` for native/spill and `gc-disabled=1` for unsafe.
+Finite benchmark completion and spill counts do not establish general GC
+safety. Raw evidence is under ignored `artifacts/bench-cljc/`:
+`step4-run{1,2,3}.json`, `step4-run{2,3}.log`,
+`measurement-step2-final.log`, `mem2-verbose.log` and
+`wasm64-mem2-{spill,unsafe}.verification.json`.
+
+### Browser execution and correctness
+
+The earlier bounded headless local-HTML experiment ran both spill modules:
+
+| Engine | MEMORY64=2 spill | MEMORY64=1 spill |
+| --- | --- | --- |
+| Playwright WebKit 27.2 Linux (build 2388) | exit 0; checksums/GC marker pass | exit 0; checksums/GC marker pass |
+| Chrome 156.0.8078.47 Linux | exit 0; checksums/GC marker pass | exit 0; checksums/GC marker pass |
+
+Neither engine reported JS exceptions or aborts. The generated startup timing
+hook used `process.uptime()`; the HTML supplied an uptime-only shim backed by
+`performance.now()`. No Wasm behavior was emulated. Chrome logged one unrelated
+HTTP 404. Logs and browser versions are in `browser-results.json` and
+`browser-{webkit,chrome}-{mem2-spill,wasm64-spill}.log` in the same artifact
+directory. This is not a test of released Safari; the memory64 control also
+ran, so mode 2 was not required for this WebKit build. No visual UI check was
+performed.
+

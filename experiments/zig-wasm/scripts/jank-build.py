@@ -52,7 +52,7 @@ class Project:
         return self.expectations[target]
 
 
-def load_project(directory=ROOT):
+def load_project(directory=ROOT, *, require_expect=True):
     root = pathlib.Path(directory).resolve()
     try:
         config = root / 'jank-build.json'
@@ -81,14 +81,16 @@ def load_project(directory=ROOT):
 
     jank = source('jank', 'src', True)
     zig = source('zig', 'native.zig', False) if 'zig' in data else None
-    raw_expect = data.get('expect')
+    raw_expect = data.get('expect', None if require_expect else [])
+    if not require_expect and raw_expect == []:
+        raw_expect = {target: [] for target in ('native', 'node', 'browser')}
     if isinstance(raw_expect, list):
         raw_expect = {target: raw_expect for target in ('native', 'node', 'browser')}
     if not isinstance(raw_expect, dict) or set(raw_expect) != {'native', 'node', 'browser'}:
         raise RuntimeError('expect must be a line list or native/node/browser line lists')
     expectations = {}
     for target, lines in raw_expect.items():
-        if not isinstance(lines, list) or not lines or any(
+        if not isinstance(lines, list) or (require_expect and not lines) or any(
                 not isinstance(line, str) or not line or '\n' in line or '\r' in line for line in lines):
             raise RuntimeError(f'expect.{target} must contain nonempty exact stdout lines')
         expectations[target] = tuple(lines)
@@ -161,7 +163,8 @@ def docker(*args, root=False, workdir=None):
 def logged(name, args, **kwargs):
     LOGS.mkdir(parents=True, exist_ok=True)
     path = LOGS / f'{name}.log'
-    print(f'Building {name} (log: {path.relative_to(ROOT)})', flush=True)
+    display = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+    print(f'Building {name} (log: {display})', flush=True)
     with path.open('w') as log:
         try:
             command(args, stdout=log, stderr=subprocess.STDOUT, **kwargs)
@@ -372,25 +375,52 @@ def wasm_compile_flags(database):
 
 
 def build_wasm(project, stage, modules, launcher, run):
+    mode = os.environ.get('JANK_WASM_BUILD_MODE', 'Oz')
+    if mode not in ('baseline', 'strip', 'Os', 'Oz', 'O3'):
+        raise ValueError('JANK_WASM_BUILD_MODE must be baseline, strip, Os, Oz or O3')
+    optimization = os.environ.get('JANK_WASM_APP_OPT', '-O2' if mode == 'baseline' else '-Os')
+    if optimization not in ('-O2', '-Os'):
+        raise ValueError('JANK_WASM_APP_OPT must be -O2 or -Os')
+    lto = ['-flto'] if os.environ.get('JANK_WASM_LTO') == '1' else []
     deps = c_dependencies(project, 'wasm')
     synchronous_raylib = 'raylib' in project.libraries and not project.frame
     target = ROOT / 'artifacts/build-wasm64'
     flags, cwd = wasm_compile_flags(json.loads((target / 'compile_commands.json').read_text()))
     flags.extend(deps.include_flags())
-    sources = [(launcher, ['-Dmain=jank_project_main']), *[(module, []) for module in modules],
-               (ROOT / 'wasm-probe/startup-driver.cpp', ['-DJANK_STARTUP_SPIKE_ONLY',
+    sources = [(launcher, ['-Dmain=jank_project_main']), *[(module, []) for module in modules]]
+    entry = target / 'libjank-wasm-entry.a'
+    if project.wasm_check == 'spike-continuous':
+        sources.append((ROOT / 'wasm-probe/startup-driver.cpp', ['-DJANK_STARTUP_SPIKE_ONLY',
                  '-DJANK_ENTRY_LAUNCHER=jank_project_main',
-                 f'-DJANK_ENTRY_NS="{project.main}"', '-DJANK_ENTRY_FN="-main"'])]
+                 f'-DJANK_ENTRY_NS="{project.main}"', '-DJANK_ENTRY_FN="-main"']))
+        entry = None
+    elif synchronous_raylib:
+        entry = target / 'libjank-wasm-raylib-entry.a'
+    if entry is not None:
+        source = ROOT / ('scripts/raylib-loop-driver.cpp' if synchronous_raylib else 'sdk/wasm-entry.cpp')
+        if not entry.exists() or source.stat().st_mtime > entry.stat().st_mtime:
+            obj = entry.with_suffix('.o')
+            run('entry', [*flags, '-O2', '-g', '-c', source, '-o', obj], cwd=cwd)
+            run('entry-archive', [pathlib.Path(flags[0]).with_name('emar'), 'rcs', entry, obj])
     if project.frame:
         namespace, function = project.frame.split('/')
-        sources[-1] = (ROOT / 'scripts/frame-driver.cpp',
-                       [f'-DJANK_FRAME_NS="{namespace}"', f'-DJANK_FRAME_FN="{function}"'])
-    elif synchronous_raylib:
-        sources[-1] = (ROOT / 'scripts/raylib-loop-driver.cpp', [])
+        config = stage / 'wasm-config.cpp'
+        config.write_text('extern "C" {\n'
+                          f'char const *jank_wasm_frame_ns = {json.dumps(namespace)};\n'
+                          f'char const *jank_wasm_frame_var = {json.dumps(function)};\n}}\n')
+        sources.append((config, []))
+    if entry is not None:
+        roots = stage / 'wasm-roots.cpp'
+        roots.write_text('#include <jank/gc.hpp>\n'
+                         'extern "C" {\nextern char __global_base, __data_end;\n'
+                         'void jank_wasm_register_roots() {\n'
+                         'GC_add_roots(&__global_base, &__data_end);\n}\n}\n')
+        sources.append((roots, []))
     objects = []
     for index, (source, extra) in enumerate(sources):
         obj = stage / f'module-{index}.o'
-        run(f'cpp-{index}', [*flags, '-O2', '-g', *extra, '-c', source, '-o', obj], cwd=cwd)
+        run(f'cpp-{index}', [*flags, optimization, *(['-g'] if mode == 'baseline' else []),
+                            *lto, *extra, '-c', source, '-o', obj], cwd=cwd)
         objects.append(obj)
     if project.zig is not None:
         zig = stage / 'kernel.o'
@@ -401,14 +431,17 @@ def build_wasm(project, stage, modules, launcher, run):
     output = project.out / 'wasm'
     output.mkdir(parents=True, exist_ok=True)
     js = output / f'{project.name}.js'
-    run('link', [flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1',
+    # The spill transform needs __stack_pointer's global name until post-link.
+    run('link', [flags[0], '-O2', *(['-g', '--profiling-funcs'] if mode == 'baseline' else ['-g2']),
+                *lto, '-sMEMORY64=1',
                 '-fwasm-exceptions', '-sALLOW_MEMORY_GROWTH=1',
                 f'-sEXIT_RUNTIME={0 if project.frame else 1}',
                 '-sSTACK_SIZE=4194304',
-                *objects, target / 'libjank-static-runtime.a', *deps.archives, *deps.link_flags,
+                *objects, *([entry] if entry is not None else []),
+                target / 'libjank-static-runtime.a', *deps.archives, *deps.link_flags,
                 *(['-sJSPI=1', '-Wl,--wrap=EndDrawing'] if synchronous_raylib else []),
                 '-Wl,--error-limit=0', '-o', js])
-    run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm')])
+    run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm'), mode])
     arguments = ['continuous', '20'] if project.wasm_check == 'spike-continuous' else ['static-roots']
     js.write_text("var Module = typeof Module !== 'undefined' ? Module : {};\n"
                   f'Module.arguments ??= {json.dumps(arguments)};\n' + js.read_text())
@@ -515,6 +548,7 @@ def execute(target, project=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
+    sub.add_parser('sdk')
     for action in ('build', 'run', 'check', 'serve'):
         action_parser = sub.add_parser(action)
         if action == 'run':
@@ -523,6 +557,9 @@ def main():
             action_parser.add_argument('--port', type=int, default=8765)
         action_parser.add_argument('app_dir', nargs='?', default=str(ROOT))
     args = parser.parse_args()
+    if args.action == 'sdk':
+        command([sys.executable, ROOT / 'sdk/package.py'])
+        return 0
     if args.action == 'build':
         build(args.app_dir)
         return 0

@@ -23,14 +23,21 @@ SAFE_IMPORTS = ['wasi_snapshot_preview1.*', 'env.__syscall_*', 'env.emscripten_r
                 'env.emscripten_err', 'env.emscripten_out', 'env.emscripten_dbg',
                 'env._emscripten_runtime_keepalive_clear', 'env._emscripten_throw_longjmp']
 
-root, wasm = map(pathlib.Path, sys.argv[1:])
+root, wasm = map(pathlib.Path, sys.argv[1:3])
+mode = sys.argv[3] if len(sys.argv) > 3 else 'baseline'
+if mode not in ('baseline', 'strip', 'Os', 'Oz', 'O3'):
+    sys.exit('Expected baseline, strip, Os, Oz or O3')
 optimizer = pathlib.Path(os.environ.get('SPILL_WASM_OPT', root / 'artifacts/build-binaryen/bin/wasm-opt'))
 if not optimizer.is_file():
     sys.exit(f'Missing {optimizer}; build the local memory64-patched Binaryen as documented in README.md')
 pipeline = os.environ.get('SPILL_PIPELINE')
 if not pipeline:
     # Stock Binaryen (e.g. the wasm32 route's emsdk wasm-opt) lacks the private pass.
-    usage = subprocess.run([str(optimizer), '--help'], capture_output=True, text=True).stdout
+    try:
+        with subprocess.Popen([str(optimizer), '--help'], stdout=subprocess.PIPE, text=True) as probe:
+            usage = probe.communicate()[0]
+    except OSError:
+        usage = ''
     pipeline = 'gc-aware' if '--gc-spill-pointers' in usage else 'legacy'
 baseline = wasm.with_suffix('.unspilled.wasm')
 transformed = wasm.with_suffix('.transformed.wasm')
@@ -56,5 +63,12 @@ if pipeline not in passes:
 subprocess.run([str(optimizer), str(baseline), *features, *passes[pipeline], '-g',
                 '-o', str(transformed)], check=True)
 transformed.replace(wasm)
+if mode != 'baseline':
+    passes = ['--strip-debug', '--strip-producers']
+    if mode != 'strip':
+        passes += ['--dce', '--remove-unused-module-elements', '--remove-unused-names', f'-{mode}']
+    subprocess.run([str(optimizer), str(wasm), *features, *passes,
+                    '-o', str(transformed)], check=True)
+    transformed.replace(wasm)
 print(f'SPILL: pipeline={pipeline} input-bytes={baseline.stat().st_size} '
       f'output-bytes={wasm.stat().st_size} elapsed-seconds={time.monotonic() - start:.6f}', flush=True)

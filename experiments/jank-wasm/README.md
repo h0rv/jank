@@ -25,7 +25,7 @@ The original baseline uses an installed jank compiler for host code generation a
 | Newer Boehm collects on wasm64 with an explicit registered root. | Smoke passed through 32 forced collections. |
 | Newer Boehm discovers local roots with Asyncify. | Current smoke passes, but earlier variants lost live objects. Unresolved. |
 | Tagged-reference lifetime cases against the real jank runtime archive. | 14/14 pass natively, on wasm32 and on wasm64 with static roots and the spill pass. Runtime-owned exception root cells protect object/error payloads, rethrow and exception_ptr; the harness exception-storage wrapper is removed. Default/static-only Wasm and test-only shadow slots still fail other cases. See [Node tests and lifetime checks](#node-test-suite-with-boehm-gc). |
-| jank test suite under Wasm, Node with GC on. | 133/134 doctests and 526/533 fixtures that run in Wasm pass. Native control: 141/141 doctests and 861 non-skipped fixtures pass. See [Node test suite](#node-test-suite-with-boehm-gc). |
+| jank test suite under Wasm, Node with GC on. | 134/134 doctests and 536 fixtures pass in Wasm; 7 fixtures are categorized jank-level known gaps. Native control: 141/141 doctests and 861 non-skipped fixtures pass. See [Node test suite](#node-test-suite-with-boehm-gc). |
 | C++ exception storage backed by Boehm GC. | Emscripten link-time allocation/free wraps retain raw and jank-tagged fields in the focused wasm32/wasm64 Node probe. See [link-time exception storage](#link-time-exception-storage). |
 | Binaryen pointer spilling. | Stock SDK fails; preserved names, flattening and a private memory64/EH-cleanup patch cover the measured operands and unwind frames. The separate isolated collector script still uses the unmodified SDK and is not fixed by this experiment. |
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
@@ -1129,45 +1129,66 @@ a subset of fixture paths. Logs and `results.json` go in a fresh directory under
 `artifacts/wasm64-tests/`. The runner requires Boehm to be enabled, requests
 `GC_set_free_space_divisor(1)`, and verifies explicit collections triggered
 before the first test and every eighth test thereafter. It links with Wasm
-exceptions, registers static data roots, and pins the `legacy-no-coalesce`
-post-link spill pipeline to keep the run reproducible. The runner gives
+exceptions, registers static data roots, and uses the `gc-aware` post-link
+spill pipeline (override with `SPILL_PIPELINE`). The runner gives
 Node's Wasm calls a larger native stack for the parser's deep-nesting doctests.
 
 The runner compiles the original portable C++ test sources. It does not link
 the native JIT file-test wrapper, the Clang/CppInterOp tests, or the LLVM Support
 hash tests. The generated-throws doctest calls the JIT, so it is filtered out;
 the other exception doctests still run. The separately reported jank-file
-results use the native compiler to wrap the unchanged fixture bodies in
-functions, then run the AOT output in Node. Leading raw C++ declarations remain
-top-level for analysis. This is not a port of the dynamic JIT: reader/analyzer
-rejections, staging-sensitive fixtures, and cases that require runtime source
-evaluation do not have the same coverage as native `eval_file`. In particular,
-a `fail-*` fixture rejected by the host frontend does **not** count as a
-Wasm pass. The results separate passes, failures after entering the Wasm
-driver, and files never run there. A crash is recorded against the last started
-test, then the runner restarts the bundle at the next unmeasured fixture.
-The driver exits nonzero for failures or missing fixture coverage, excluding
-the suite's declared skips and allowed-failure files.
+results use the native compiler to AOT-compile the unchanged fixture bodies,
+then run the output in Node. This is not a port of the dynamic JIT. Native
+`eval_file` evaluates each top-level form before analyzing the next, so a
+`pass-*` fixture keeps its leading forms top-level (the host evaluates them while
+compiling and the Wasm module load re-runs them) and only its final form runs
+from the entry function. Leading raw C++ declarations remain top-level. `fail-*`
+and `throw-*` bodies stay wrapped so they fail in Wasm, not on the host. The
+wrapped body is a `let*` binding, not the function tail, so a top-level `recur`
+is rejected as natively. Generated C++ is compiled with `-w
+-Wno-c++11-narrowing`, as jank's own AOT and JIT compiles do.
+
+A `fail-*` fixture rejected by the host frontend fails at compile time as
+natively; it does **not** count as a Wasm pass and is reported as a categorized
+skip. Fixtures that fail for a verified cause outside the runner are listed in
+`knownGaps` in `scripts/wasm-tests.mjs` with a category and reason; each must
+keep reproducing its recorded status or the run fails. A crash is recorded
+against the last started test, then the runner restarts the bundle at the next
+unmeasured fixture. The driver exits nonzero for any other status, failed batch
+or missing fixture coverage.
 
 Observed on Node 26.13.1 with Emscripten 7.0.0:
 
-| Suite | Passed in Wasm | Failed in Wasm | Not run in Wasm |
+| Suite | Passed in Wasm | Known gaps | Not run in Wasm |
 |---|---:|---:|---:|
-| C++ doctests (141 native cases) | 133 | 1 | 7 |
-| jank fixtures (870 paths) | 526 | 7 | 337 |
+| C++ doctests (141 native cases) | 134 | 0 | 7 |
+| jank fixtures (870 paths) | 536 | 7 | 327 |
 
 The native control passed all 141 doctests and all 861 non-skipped fixtures.
 Both wasm32 and wasm64 also pass the separate 14-case lifetime matrix below.
-The Wasm doctests observed 17 explicit collections. The exception copy/move
-test saw a released payload remain alive; relinking with the scanned C++
-exception-storage wrapper did not change that result. This assertion does
-not distinguish a lingering conservative root from a leak.
+Of the fixtures that never ran, the host rejected 318 negative fixtures at
+compile time and 9 were suite skips. The doctests observed 17 explicit
+collections.
 
-Of the fixtures that never ran, the host rejected 317 negative fixtures and
-4 positive fixtures, the target C++ compiler rejected 7, and 9 were suite
-skips. The Wasm failures were 3 unexpected throws, 2 native exceptions, 1
-jank error, and 1 trap. The trapped fixture is a top-level `(recur)`: wrapping
-it in a function changes its context, so the trap is not evidence of a GC bug.
+Triage of the eight earlier failures (1 doctest, 7 fixtures):
+
+| Test | Cause | Category | Result |
+|---|---|---|---|
+| `throw.cpp` rooted exception copies/moves | The `legacy-no-coalesce` spill pipeline left a released payload reachable from a spilled local | post-link spill | Fixed: `gc-aware` pipeline |
+| `form/fn/recur/fail-outside-of-fn-nullary` | The wrapper function gave the top-level `recur` a target | runner | Fixed: non-tail wrapper; host rejects it as natively |
+| `macro/pass-return-vector`, `reader-macro/function/pass-syntax-quote` | A macro defined in the wrapped body was never defined when the call was analyzed, so it was called as a function | runner staging | Fixed: per-form staging |
+| `syntax-quote/pass-resolve-alias` | The alias was not established when the syntax quote was analyzed | runner staging | Fixed: per-form staging |
+| `syntax-quote/unquote-splice/pass-body` | Same macro staging cause | runner staging | Fixed: per-form staging |
+| `form/case/pass-big-integer` | AOT stores lifted big-integer constants untagged in `object_ref` slots (`new (&c) auto(make_box<big_integer>(...))`), so NaN-boxing reads `1N` as a small real | jank AOT codegen | Reported; known gap |
+| `metadata/fail-with-meta-not-metadatable` | AOT-compiled calls do not attach call-site source to runtime errors; the fixture contract requires a source | jank AOT codegen | Reported; known gap |
+
+Per-form staging also made four previously host-rejected positive fixtures
+run. Three pass. `var/ref/pass-private` fails because AOT qualifies a `def`
+after an in-file `ns` switch with the module namespace. Four interop fixtures
+fail to compile for the target because the host analyzer emits libstdc++
+internals (`__ostream_type`, `__gnu_cxx`) that libc++ lacks. Both are known
+gaps. Three interop fixtures that previously failed the target compile on
+C++11 narrowing now compile with jank's own flags and pass.
 
 Run the existing 14-case lifetime probe against each pointer width, with
 static roots and the `legacy` spill pipeline (with local coalescing):

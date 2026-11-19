@@ -1,8 +1,8 @@
-# jank, Zig and Wasm research
+# jank-wasm research
 
 This directory preserves a measured experiment from 2026-11-16. It is AI-assisted research in a personal fork. It is not an upstream contribution or a claim that jank supports Wasm.
 
-Read the complete handoff prompt at [`../../ZIG_WASM_PROMPT.md`](../../ZIG_WASM_PROMPT.md).
+Read the complete handoff prompt at [`../../JANK_WASM_PROMPT.md`](../../JANK_WASM_PROMPT.md).
 
 ## Starting point
 
@@ -84,7 +84,7 @@ links jank's generated C++ and runtime for Wasm.
 See [Using Zig with jank](ZIG.md) for library integration and measured toolchain trade-offs.
 
 ```sh
-cd experiments/zig-wasm
+cd experiments/jank-wasm
 ./jank-build build
 ./jank-build check
 ./jank-build run native       # Ubuntu 24.04 executable, run in the container
@@ -94,9 +94,7 @@ cd experiments/zig-wasm
 ```
 
 Every command accepts an optional final project directory, defaulting to this
-experiment's Zig interop spike. `jank-zig` remains a thin alias forwarding all
-arguments unchanged. A project contains `jank-build.json`; the driver falls
-back to `jank-zig.json` only when the new filename is absent:
+experiment's optional Zig interop spike. A project contains `jank-build.json`:
 
 ```json
 {"name": "hello", "main": "hello.core", "jank": "src",
@@ -121,7 +119,6 @@ be unique within this checkout's output directory.
 ```sh
 ./jank-build check examples/hello-cljc  # pure jank; native, Node and Chrome
 ./jank-build run browser examples/hello-cljc
-./jank-zig check examples/hello-cljc    # legacy alias, same command
 ```
 
 This pure-jank example computes the weighted sum of `[1 2 3 4]` as 30 and shares
@@ -252,7 +249,7 @@ installation occurs only inside the disposable container.
 
 ```sh
 docker run --rm -v "$PWD/../..:/home/ubuntu/repos/jank" \
-  -w /home/ubuntu/repos/jank/experiments/zig-wasm ubuntu:24.04 bash -c '
+  -w /home/ubuntu/repos/jank/experiments/jank-wasm ubuntu:24.04 bash -c '
   mkdir -p artifacts/logs
   apt-get update > artifacts/logs/linux-container-setup.log 2>&1 &&
   DEBIAN_FRONTEND=noninteractive apt-get install -y gcc g++-14 libxml2 \
@@ -334,7 +331,7 @@ From this experiment directory, the container/toolchain setup is:
 mkdir -p artifacts/logs
 docker run -d --name jank-host-build \
   -v "$PWD/../..:/home/ubuntu/repos/jank" \
-  -w /home/ubuntu/repos/jank/experiments/zig-wasm ubuntu:24.04 tail -f /dev/null
+  -w /home/ubuntu/repos/jank/experiments/jank-wasm ubuntu:24.04 tail -f /dev/null
 docker exec jank-host-build bash -c '
   set -euo pipefail
   apt-get update
@@ -730,7 +727,7 @@ docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh
 python3 scripts/check-target-config.py --generated artifacts/build-wasm64/target_config.json
 docker exec --user 1000:1000 jank-host-build bash scripts/build-wasm64-target.sh build
 docker exec --user 1000:1000 jank-host-build cmake --install artifacts/build-wasm64 \
-  --prefix /home/ubuntu/repos/jank/experiments/zig-wasm/.tools/wasm64-install
+  --prefix /home/ubuntu/repos/jank/experiments/jank-wasm/.tools/wasm64-install
 docker exec --user 1000:1000 jank-host-build python3 scripts/check-target-aot.py
 docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh test
 docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh install
@@ -1855,7 +1852,7 @@ passes all seven cases, but the full native suite was not rerun for this step.
 ### Release-build spill cost (AI-assisted measurement)
 
 Measured on the x86-64 Intel Xeon/KVM host (8 vCPUs), entirely in the
-`ubuntu:24.04` `jank-host-build` container bootstrapped by `jank-zig`.
+`ubuntu:24.04` `jank-host-build` container bootstrapped by `jank-build` (then named `jank-zig`).
 Updated after merging PR #14 (`origin/main` at `f39bf5ec2`). Zig is **0.17.1**,
 Node **26.13.1**, Emscripten **7.0.0**; Binaryen is `a9141c8cc` with main's
 expanded memory64/EH-cleanup/fresh-slot-zeroing patch (SHA-256
@@ -1905,10 +1902,10 @@ exact pass order, patch and 4-MiB stack, with no extra optimization pass.
 We did not rerun spill-only or an all-`-O0` runtime build. These measurements
 do not isolate individual pass costs or establish general GC safety.
 
-Reproduce from `experiments/zig-wasm`:
+Reproduce from `experiments/jank-wasm`:
 
 ```sh
-./jank-zig build
+./jank-build build
 docker exec --user 1000:1000 jank-host-build \
   python3 scripts/measure-spill-cost.py --self-test
 docker exec --user 1000:1000 jank-host-build \
@@ -1918,7 +1915,7 @@ cat artifacts/spill-cost/results.json
 
 For pre-PR-#14 SDK trees, first reverse the old private Binaryen patch or
 re-extract the pinned source archive: the expanded patch requires a clean
-`a9141c8cc` tree, as described in the follow-up below. `jank-zig build` then
+`a9141c8cc` tree, as described in the follow-up below. `jank-build build` then
 rebuilds Binaryen and refreshes its patch stamp; the measurement script checks
 that stamp. No container, runtime archive or global SDK reinstall is needed.
 
@@ -1981,7 +1978,7 @@ the shared `wasm-probe/spill-pointers.py` now runs:
 --flatten --spill-pointers --reorder-locals --coalesce-locals --reorder-locals -g
 ```
 
-Both `jank-build` and the compatibility `jank-zig` entry point use that helper.
+`jank-build` uses that helper (the historical compatibility `jank-zig` entry point has been removed).
 No runtime, collector patch, spill-slot allocation/zeroing, stack size, or GC
 policy changed. Reordering first removes unused locals before the nonlinear
 coalescing pass; the final reorder removes unused indices and favors frequent
@@ -2089,8 +2086,8 @@ Reproduce sequentially from this directory (do not rebuild/check concurrently
 with measurement, since `check` recreates the staged sources):
 
 ```sh
-./jank-zig check
-./jank-zig run node
+./jank-build check
+./jank-build run node
 docker exec --user 1000:1000 jank-host-build \
   python3 scripts/measure-spill-cost.py --self-test
 docker exec --user 1000:1000 jank-host-build \
@@ -2640,7 +2637,7 @@ exception destruction, and reference counting stay in libc++abi. The native
 link and jank's existing runtime-owned exception roots are unchanged.
 
 With Emscripten 7.0.0 and the patched bdwgc submodule available, run this from
-`experiments/zig-wasm`:
+`experiments/jank-wasm`:
 
 ```sh
 bash scripts/check-exception-roots.sh
@@ -2722,7 +2719,7 @@ works for this spike. Wasm64 still uses the private memory64/EH-cleanup build.
 The patch's zeroing/EH changes also apply to i32 by inspection, but are not
 needed to reach these wasm32 markers; wasm32 exception-lifetime/reclamation
 coverage was not established. Logs are `artifacts/logs/wasm{32,64}-*`; binaries
-are under `artifacts/wasm{32,64}-spike`. The `jank-zig` wrapper still defaults
+are under `artifacts/wasm{32,64}-spike`. The `jank-build` wrapper still defaults
 to wasm64; width selection here is through the lower-level helper.
 
 **Correctness scope:** these finite numeric and spike assertions do not prove
@@ -2963,7 +2960,7 @@ docker exec --user 1000:1000 jank-host-build bash scripts/build-host-linux.sh te
 # Emscripten wasm32 shared-source/script regression, stock Binaryen 133:
 for step in configure build startup-spill; do
   docker exec --user 1000:1000 -e WASM_BITS=32 \
-    -e SPILL_WASM_OPT=/home/ubuntu/repos/jank/experiments/zig-wasm/.tools/gc-wasm/emsdk/upstream/bin/wasm-opt \
+    -e SPILL_WASM_OPT=/home/ubuntu/repos/jank/experiments/jank-wasm/.tools/gc-wasm/emsdk/upstream/bin/wasm-opt \
     jank-host-build bash scripts/build-wasm64-target.sh "$step" || break
 done
 ```
@@ -3159,15 +3156,15 @@ correctness. There is no general WASI-support claim.
 From the repository root:
 
 ```sh
-bash experiments/zig-wasm/scripts/wasi-probe.sh
-bash experiments/zig-wasm/scripts/wasi-shim-tests.sh
-experiments/zig-wasm/.tools/node-v26.13.1-linux-x64/bin/node \
-  --test experiments/zig-wasm/scripts/wasi-imports-test.mjs
+bash experiments/jank-wasm/scripts/wasi-probe.sh
+bash experiments/jank-wasm/scripts/wasi-shim-tests.sh
+experiments/jank-wasm/.tools/node-v26.13.1-linux-x64/bin/node \
+  --test experiments/jank-wasm/scripts/wasi-imports-test.mjs
 ```
 
 The main script downloads missing pinned SDK/Wasmtime/Binaryen releases into
 ignored `.tools/wasi`, checking archive SHA256s. It reuses the existing
-`jank-zig.py` bootstrap for Docker/native/Emscripten/patched Binaryen prerequisites,
+`scripts/jank-build.py` bootstrap for Docker/native/Emscripten/patched Binaryen prerequisites,
 then rebuilds the native spike and Node startup-spill control before the WASI
 link. Host prerequisites are the same as the Linux wrapper, plus `sha256sum`
 and `rg`; packages are installed **only inside the container**, never on the
@@ -3176,7 +3173,7 @@ host. An obsolete private Binaryen source tree is preserved under ignored
 As with the Node wrapper, changed compiler/runtime sources require explicit
 prerequisite rebuilds. No browser tooling is needed for these WASI commands.
 
-The exact final command, from `experiments/zig-wasm`, is:
+The exact final command, from `experiments/jank-wasm`, is:
 
 ```sh
 .tools/wasi/wasmtime-v50.0.2-x86_64-linux/wasmtime run \
@@ -3382,7 +3379,7 @@ Node 24), native jank, and the experimental wasm64 spill build. Run from the
 repository root:
 
 ```sh
-python3 -B experiments/zig-wasm/examples/bench-cljc/measure.py
+python3 -B experiments/jank-wasm/examples/bench-cljc/measure.py
 ```
 
 `wasm64-spill` uses the default call-graph-aware spill pipeline;

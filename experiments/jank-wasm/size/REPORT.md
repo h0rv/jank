@@ -117,7 +117,7 @@ varying concurrent build/optimizer CPU load, measured from navigation script to
 first frame callback. They are **not** a controlled startup-performance comparison.
 There is no statistically supported startup-speed claim here.
 
-Selected artifacts, relative to `experiments/zig-wasm/`:
+Selected artifacts, relative to `experiments/jank-wasm/`:
 
 * `artifacts/size/app-Os-Oz/live.png`, `flappy-bird.png`
 * `artifacts/size/app-Os-Oz/{live,flappy-bird}.browser.json` and `.console.log`
@@ -139,7 +139,7 @@ preserving the old baseline behavior for standalone callers with no mode argumen
 `build-pages.sh` needs no edit: it already uses jank-build for both demos and
 copies only final modules, preserving the cache-busting scheme.
 
-From `experiments/zig-wasm/`, the new default full build is still:
+From `experiments/jank-wasm/`, the new default full build is still:
 
 ```sh
 bash scripts/build-pages.sh
@@ -318,18 +318,18 @@ it is **not** a recommendation for deployable output. Copies were not executed.
 
 Paths relative to repository root:
 
-* `experiments/zig-wasm/scripts/build-pages.sh:6-14`: builds `examples/live-demo`
+* `experiments/jank-wasm/scripts/build-pages.sh:6-14`: builds `examples/live-demo`
   and `examples/flappy-bird` via `jank-build`, copies only their final Wasm/JS.
-* `experiments/zig-wasm/jank-build:4` dispatches to `scripts/jank-build.py`.
+* `experiments/jank-wasm/jank-build:4` dispatches to `scripts/jank-build.py`.
   Its lines 25 and 177-183 require/validate the `jank-host-build` ubuntu:24.04
   container with the same-path repository mount.
-* `experiments/zig-wasm/scripts/build-wasm64-target.sh:76-92`: target runtime
+* `experiments/jank-wasm/scripts/build-wasm64-target.sh:76-92`: target runtime
   CMake Release, memory64, Wasm exceptions, cross compilation, host phase-1
   compiler, threads disabled. `compiler+runtime/CMakeLists.txt:155-157` specifies
   Release `-O2 -DNDEBUG`, core optimization `-O3`.
 * `compiler+runtime/CMakeLists.txt:18-19`: explicitly disables CMake IPO/LTO.
   App compile/link commands add no `-flto`. No LTO run was observed or performed.
-* `experiments/zig-wasm/scripts/jank-build.py:362-393`: inherits target runtime
+* `experiments/jank-wasm/scripts/jank-build.py:362-393`: inherits target runtime
   flags from compile_commands.json, then app generated C++ compiles `-O2 -g`.
 * Same file lines 404-410: link `-O2 -g --profiling-funcs -sMEMORY64=1
   -fwasm-exceptions -sALLOW_MEMORY_GROWTH=1 -sSTACK_SIZE=4194304`, plus project
@@ -337,10 +337,10 @@ Paths relative to repository root:
   Live config (`examples/live-demo/jank-build.json:2-6`) sets a frame callback
   and `-sMODULARIZE=1 -sEXPORT_NAME=createLive`; game links raylib
   (`examples/flappy-bird/jank-build.json:2-6`).
-* `experiments/zig-wasm/scripts/build-raylib.sh:41-46`: raylib WebGL ES3 web
+* `experiments/jank-wasm/scripts/build-raylib.sh:41-46`: raylib WebGL ES3 web
   build with memory64/exceptions; raygui compiled `-O2`. The makefile supplies
   raylib's own optimization default; not recovered from a build log here.
-* `experiments/zig-wasm/scripts/jank-build.py:411` invokes
+* `experiments/jank-wasm/scripts/jank-build.py:411` invokes
   `wasm-probe/spill-pointers.py`; lines 13-22 of that helper preserve an
   `.unspilled.wasm` then run private patched Binaryen:
   `--flatten --spill-pointers --reorder-locals --coalesce-locals --reorder-locals -g`
@@ -352,7 +352,7 @@ pipeline. Exact tool invocations of the deployment itself remain unverified.
 
 ## Reproduction artifacts and checks
 
-Ignored `experiments/zig-wasm/artifacts/size/` contains downloaded originals,
+Ignored `experiments/jank-wasm/artifacts/size/` contains downloaded originals,
 `measure.mjs` (section parser/body sizes/compression), `summarize.mjs` (classification),
 per-module JSON including every named function, component JSON, Binaryen metrics,
 and both stripping variants. Binaryen 133 was downloaded under ignored `.tools/`;
@@ -361,10 +361,10 @@ no system tooling was installed. Node built-in zlib supplies compression.
 Commands from repository root:
 
 ```sh
-node experiments/zig-wasm/artifacts/size/measure.mjs
-node experiments/zig-wasm/artifacts/size/summarize.mjs
-experiments/zig-wasm/.tools/binaryen-version_133/bin/wasm-opt \
-  experiments/zig-wasm/artifacts/size/live.wasm --all-features --metrics -o /dev/null
+node experiments/jank-wasm/artifacts/size/measure.mjs
+node experiments/jank-wasm/artifacts/size/summarize.mjs
+experiments/jank-wasm/.tools/binaryen-version_133/bin/wasm-opt \
+  experiments/jank-wasm/artifacts/size/live.wasm --all-features --metrics -o /dev/null
 ```
 
 Printed checks (both modules): `section total check true`; all defined functions

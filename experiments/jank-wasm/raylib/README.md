@@ -1,6 +1,6 @@
 # Private raylib/raygui browser probe (AI-assisted)
 
-From `experiments/zig-wasm`, after the jank-build bootstrap supplies the local
+From `experiments/jank-wasm`, after the jank-build bootstrap supplies the local
 Emscripten 7.0.0 SDK and `jank-host-build` container:
 
 ```sh

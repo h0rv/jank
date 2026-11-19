@@ -252,10 +252,11 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(self.load().zig, self.root / 'native.zig')
         self.assertIsNotNone(driver.load_project().zig)
 
-    def test_legacy_config_fallback_and_new_config_precedence(self):
+    def test_legacy_config_is_not_loaded(self):
         (self.root / 'jank-zig.json').write_text(driver.json.dumps(
             {**self.config, 'name': 'legacy', 'zig': 'native.zig'}))
-        self.assertEqual(driver.load_project(self.root).name, 'legacy')
+        with self.assertRaisesRegex(RuntimeError, 'Cannot read project config'):
+            driver.load_project(self.root)
         self.assertEqual(self.load().name, self.root.name)
         (self.root / 'jank-build.json').write_text('{')
         with self.assertRaisesRegex(RuntimeError, 'Cannot read project config'):

@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-APP="${JANK_ZIG_APP:-$ROOT}"
+APP="${JANK_WASM_APP:-$ROOT}"
 ZIG="${ZIG:-zig}"
 JANK="${JANK:-jank}"
 RUNTIME="${JANK_RUNTIME_DIR:-/opt/homebrew/opt/jank/lib/jank/0.1}"

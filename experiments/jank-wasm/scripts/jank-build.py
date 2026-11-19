@@ -56,8 +56,6 @@ def load_project(directory=ROOT, *, require_expect=True):
     root = pathlib.Path(directory).resolve()
     try:
         config = root / 'jank-build.json'
-        if not config.exists():
-            config = root / 'jank-zig.json'
         data = json.loads(config.read_text())
     except (OSError, ValueError) as error:
         raise RuntimeError(f'Cannot read project config in {root}: {error}') from error

@@ -3,8 +3,8 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-APP="${JANK_ZIG_APP:-$ROOT}"
-export JANK_ZIG_APP="$APP"
+APP="${JANK_WASM_APP:-$ROOT}"
+export JANK_WASM_APP="$APP"
 SOURCE="$(cd ../.. && pwd)/compiler+runtime"
 SDK="${EMSDK:-$ROOT/.tools/gc-wasm/emsdk}"
 BITS="${WASM_BITS:-64}"
@@ -147,7 +147,7 @@ import json, os, pathlib, shlex, subprocess, sys
 root = pathlib.Path(sys.argv[1])
 bits = sys.argv[3]
 out = root / f'artifacts/wasm{bits}-spike'
-app = pathlib.Path(os.environ['JANK_ZIG_APP'])
+app = pathlib.Path(os.environ['JANK_WASM_APP'])
 build = root / f'artifacts/build-wasm{bits}'
 variant = sys.argv[2]
 database = json.loads((build / 'compile_commands.json').read_text())
@@ -178,7 +178,7 @@ subprocess.run([flags[0], '-O2', '-g', '--profiling-funcs',
                 *(['-sMEMORY64=1'] if bits == '64' else []), '-fwasm-exceptions',
                 '-sALLOW_MEMORY_GROWTH=1',
                 *(['-sSTACK_SIZE=4194304'] if variant == 'startup-spill' else []),
-                *(['-sEXIT_RUNTIME=1'] if os.environ.get('JANK_ZIG_APP_MODE') == '1' else []),
+                *(['-sEXIT_RUNTIME=1'] if os.environ.get('JANK_WASM_APP_MODE') == '1' else []),
                 *objects, str(out / (variant + '-zig.o')),
                 str(build / 'libjank-static-runtime.a'), '-Wl,--error-limit=0',
                 '-o', str(out / (variant + '.js'))], check=True)

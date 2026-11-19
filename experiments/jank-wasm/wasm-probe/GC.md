@@ -6,7 +6,7 @@ All downloads stay in `.tools/gc-wasm`. Build outputs and logs stay in
 
 ## Reproduce
 
-Run these commands from `experiments/zig-wasm`, not the repository root.
+Run these commands from `experiments/jank-wasm`, not the repository root.
 The first command downloads the official prebuilt Emscripten SDK and upstream
 Boehm sources when they are missing.
 It does not build LLVM.

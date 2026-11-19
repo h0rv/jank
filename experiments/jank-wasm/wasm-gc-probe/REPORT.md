@@ -4,7 +4,7 @@ AI-assisted research for h0rv/jank-wasm only; no upstream submission. Inspected 
 at `0573e30c02f19cba9db406876d76ee1fadf02dc9`; remote
 `research/zig-wasm` is `a2f9916517d67860bce2978bd5d97914d80d7d44`.
 Stayed on main as requested. No commits or pushes. Read AGENTS.md,
-CONTRIBUTING.md, ZIG_WASM_PROMPT.md and experiments/zig-wasm/README.md.
+CONTRIBUTING.md, JANK_WASM_PROMPT.md and experiments/jank-wasm/README.md.
 
 ## Current wasm64 collector in ten lines (source/docs, not rerun here)
 
@@ -35,7 +35,7 @@ Paths in this section are relative to `compiler+runtime/`.
 | Arithmetic/FFI | `runtime/obj/array.hpp:156` clones with std::copy(data.data, data.data + size, ...); indexed reads/writes use data[i]. `runtime/obj/native_pointer_wrapper.hpp` stores void* and reinterpret_casts it to T*. Such interior addresses/borrowed buffers remain linear-memory concepts. |
 | Containers | `include/cpp/jank/type.hpp:25–40`: native_allocator = gc_allocator<T>, Immer gc_heap/no_refcount/gc_transience policy, Folly fbvector with GC allocator. `runtime/detail/type.hpp:41–57`: Immer vector/set/map store object_ref keys/values. These C++ container nodes and backing buffers cannot simply contain raw engine references as ordinary sized fields. |
 | Destruction | `src/cpp/jank/codegen/cpp_processor.cpp:1871–1918`: cpp/new intentionally does not register finalizers (cycle concern); cpp/delete explicitly calls a nontrivial destructor then GC_free. `object : gc` has a virtual destructor, but is not evidence that GC invokes every destructor. Search found no GC_register_finalizer/gc_cleanup integration in compiler+runtime. Engine GC is not a substitute for explicit C++ resource destruction. |
-| Static roots | `src/cpp/jank/codegen/cpp_processor.cpp:2130,2166` emits GC_add_roots for lifted globals; `experiments/zig-wasm/wasm-probe/startup-driver.cpp:83` registers the entire diagnostic static range. |
+| Static roots | `src/cpp/jank/codegen/cpp_processor.cpp:2130,2166` emits GC_add_roots for lifted globals; `experiments/jank-wasm/wasm-probe/startup-driver.cpp:83` registers the entire diagnostic static range. |
 
 ## Tool survey (executed locally)
 

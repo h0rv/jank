@@ -1,6 +1,6 @@
 # Research fork instructions
 
-This checkout is a personal, AI-assisted jank research fork. Before changing code, read `CONTRIBUTING.md`, `ZIG_WASM_PROMPT.md`, and `experiments/zig-wasm/README.md` in full.
+This checkout is a personal, AI-assisted jank research fork. Before changing code, read `CONTRIBUTING.md`, `JANK_WASM_PROMPT.md`, and `experiments/jank-wasm/README.md` in full.
 
 Upstream forbids AI-generated external contributions, including code and prose. Keep this work in the fork. Do not submit it upstream as human-created work or remove its provenance to bypass that policy. Do not contact maintainers or open upstream pull requests without separate user authorization.
 

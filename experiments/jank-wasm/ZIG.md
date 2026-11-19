@@ -23,12 +23,12 @@ The worked example is this directory's spike. Its actual
 }
 ```
 
-From `experiments/zig-wasm`, run `./jank-build check` to build and check native,
+From `experiments/jank-wasm`, run `./jank-build check` to build and check native,
 Node and browser outputs. Pass another project directory as the final argument.
 For a new project, choose its own `name`, entry namespace and expected lines;
 omit `wasm_check` for the ordinary single-run check. Omit `zig` entirely for
 pure jank, as in [`examples/hello-cljc`](examples/hello-cljc/jank-build.json).
-`jank-zig` remains an alias. Host prerequisites and output locations are in the
+Host prerequisites and output locations are in the
 [one-command instructions](README.md#one-command-native--wasm).
 
 ### Export and call C-compatible functions

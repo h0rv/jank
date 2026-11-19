@@ -15,7 +15,7 @@ owns pacing, avoiding a second busy-wait in raylib's `EndDrawing`.
 Print an initialization marker. The shared
 `core.cljc` is byte-for-byte unchanged. Portal/tap development code is retained.
 
-From `experiments/zig-wasm`:
+From `experiments/jank-wasm`:
 
 ```sh
 ./jank-build build examples/tetris

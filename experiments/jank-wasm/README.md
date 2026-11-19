@@ -24,7 +24,8 @@ The original baseline uses an installed jank compiler for host code generation a
 | The same module compiles to wasm32-WASI. | Failed in the original test on pointer width, platform guards and C++ threading dependencies. Superseded by the later wasm32 representation port and the genuine wasm32-wasip1 row below. |
 | Newer Boehm collects on wasm64 with an explicit registered root. | Smoke passed through 32 forced collections. |
 | Newer Boehm discovers local roots with Asyncify. | Current smoke passes, but earlier variants lost live objects. Unresolved. |
-| Tagged-reference lifetime cases against the real jank runtime archive. | Fourteen cases pass natively and with flatten/spill/EH cleanup. Runtime-owned exception root cells protect object/error payloads, rethrow and exception_ptr; the harness exception-storage wrapper is removed. Default/static-only Wasm and test-only shadow slots still fail other cases. See [runtime-owned exceptions](#runtime-owned-exception-roots). |
+| Tagged-reference lifetime cases against the real jank runtime archive. | 14/14 pass natively, on wasm32 and on wasm64 with static roots and the spill pass. Runtime-owned exception root cells protect object/error payloads, rethrow and exception_ptr; the harness exception-storage wrapper is removed. Default/static-only Wasm and test-only shadow slots still fail other cases. See [Node tests and lifetime checks](#node-test-suite-with-boehm-gc). |
+| jank test suite under Wasm, Node with GC on. | 133/134 doctests and 526/533 fixtures that run in Wasm pass. Native control: 141/141 doctests and 861 non-skipped fixtures pass. See [Node test suite](#node-test-suite-with-boehm-gc). |
 | C++ exception storage backed by Boehm GC. | Emscripten link-time allocation/free wraps retain raw and jank-tagged fields in the focused wasm32/wasm64 Node probe. See [link-time exception storage](#link-time-exception-storage). |
 | Binaryen pointer spilling. | Stock SDK fails; preserved names, flattening and a private memory64/EH-cleanup patch cover the measured operands and unwind frames. The separate isolated collector script still uses the unmodified SDK and is not fixed by this experiment. |
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
@@ -77,9 +78,38 @@ memory64, Wasm exception and experimental rooting limitations below still apply.
 ### One command: native + Wasm
 
 This AI-assisted Linux x86_64 research wrapper builds the same jank sources
-for native and Wasm from the host shell. Zig is an optional native-library
-input, not what enables the Wasm build: Emscripten's Clang/LLVM compiles and
-links jank's generated C++ and runtime for Wasm.
+for native and Wasm from the host shell. Host prerequisites are Docker with a
+running daemon, Python 3.10+, git and curl. Browser checks require Chrome on
+PATH, `$CHROME`, or a local Chromium installed by `setup --browser`. Cargo is
+needed only for the Pages build. Emscripten's Clang/LLVM compiles and links
+jank's generated C++ and runtime for Wasm.
+
+```sh
+./jank-build setup [--check] [--browser] [PROJECT]
+./jank-build new DIR [--name NAME]
+./jank-build check DIR
+```
+
+`setup` prepares the container, submodules, Node, Emscripten, host compiler,
+runtime and entry archives, patched Binaryen, and any project-requested
+libraries or Zig toolchain. Downloads and outputs stay under `.tools/` and
+`artifacts/`. Cold setup took about 12 minutes on this VM. Its final table lists
+each component's pinned version, cached path, and `cached`, `built` or `missing`
+state. `setup --check` builds nothing and exits 1 if a component is missing.
+`new` creates `jank-build.json` and `src/<namespace>/core.jank` with a `-main`
+and an expected output line; it refuses to overwrite existing files.
+
+Unchanged builds reuse a content stamp and took about 0.4 seconds on this VM.
+Changes to project sources or include directories, build scripts, SDK sources,
+Wasm probes, runtime/compiler/optimizer or library archives, and `JANK_` or
+`SPILL_` environment settings invalidate it. Missing outputs trigger a rebuild.
+Submodule updates are skipped when the recursive status hash matches its stamp;
+Binaryen retains its patch-digest stamp.
+
+Projects need no per-project C++ driver. The build supplies static-root
+registration, entry code and optional frame configuration at link time.
+The [offline SDK](SDK.md) provides Docker-free offline project builds on
+Linux x86_64 after extraction.
 
 See [Using Zig with jank](ZIG.md) for library integration and measured toolchain trade-offs.
 
@@ -93,7 +123,7 @@ cd experiments/jank-wasm
 ./jank-build serve            # http://127.0.0.1:8765/; Ctrl-C to stop
 ```
 
-Every command accepts an optional final project directory, defaulting to this
+`build`, `check`, `run` and `serve` accept an optional final project directory, defaulting to this
 experiment's optional Zig interop spike. A project contains `jank-build.json`:
 
 ```json
@@ -141,6 +171,10 @@ title only after exit 0 and all expected lines. `check` rebuilds the project,
 requires native, Node and headless Chrome success and
 prints a verdict table. Logs and browser DOM evidence are in
 `artifacts/logs/app/`. `serve --port N` selects another port.
+
+The default release build measured `live.wasm` at **7.87 MB raw / 1.08 MB
+gzip -9** and `flappy-bird.wasm` at **8.05 MB / 1.14 MB**, using decimal MB.
+See the Selected row in the [size report](size/REPORT.md).
 
 ### C libraries and interactive browser frames
 
@@ -1123,6 +1157,7 @@ Observed on Node 26.13.1 with Emscripten 7.0.0:
 | jank fixtures (870 paths) | 526 | 7 | 337 |
 
 The native control passed all 141 doctests and all 861 non-skipped fixtures.
+Both wasm32 and wasm64 also pass the separate 14-case lifetime matrix below.
 The Wasm doctests observed 17 explicit collections. The exception copy/move
 test saw a released payload remain alive; relinking with the scanned C++
 exception-storage wrapper did not change that result. This assertion does

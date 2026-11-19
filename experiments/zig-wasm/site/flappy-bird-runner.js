@@ -13,6 +13,13 @@ function fail(reason) {
   message.textContent = `Could not run the game. Needs memory64, Wasm exceptions, JSPI and WebGL2. ${reason}`;
   diagnostics.hidden = false;
 }
+function hasWebGL2() {
+  try {
+    return !!document.createElement('canvas').getContext('webgl2');
+  } catch {
+    return false;
+  }
+}
 canvas.addEventListener('click', () => canvas.focus());
 canvas.addEventListener('keydown', event => {
   if (event.code === 'Space') event.preventDefault();
@@ -40,6 +47,8 @@ if (typeof WebAssembly === 'undefined') {
   fail('WebAssembly is unavailable in this browser.');
 } else if (typeof WebAssembly.promising !== 'function' || typeof WebAssembly.Suspending !== 'function') {
   fail('WebAssembly JSPI is unavailable in this browser.');
+} else if (!hasWebGL2()) {
+  fail('WebGL2 is unavailable in this browser.');
 } else {
   const script = document.createElement('script');
   script.src = `flappy-bird.js${version}`;

@@ -126,7 +126,7 @@ test('abort, runtime errors and rejected promises fail visibly', () => {
   }
 });
 
-function gameRunner({ output = '', wasm = true, jspi = true, currentScript } = {}) {
+function gameRunner({ output = '', wasm = true, jspi = true, webgl2 = true, contextError = false, currentScript } = {}) {
   const elements = Object.fromEntries(['stdout', 'status', 'app', 'canvas', 'game-message'].map(id => [id, { textContent: '' }]));
   const canvasListeners = {};
   elements.canvas.addEventListener = (name, callback) => { canvasListeners[name] = callback; };
@@ -134,19 +134,46 @@ function gameRunner({ output = '', wasm = true, jspi = true, currentScript } = {
   elements.app.textContent = output;
   const listeners = {};
   const scripts = [];
+  const contextRequests = [];
   const document = {
     currentScript,
     documentElement: { dataset: { status: 'running' } },
     getElementById: id => elements[id],
-    createElement: () => ({}),
+    createElement: tag => tag === 'canvas' ? {
+      getContext(type) {
+        contextRequests.push(type);
+        if (contextError) throw new Error('Context unavailable');
+        return webgl2 ? {} : null;
+      }
+    } : {},
     body: { appendChild: script => scripts.push(script) }
   };
   const context = vm.createContext({ document, URL,
     WebAssembly: wasm ? (jspi ? { promising() {}, Suspending() {} } : {}) : undefined,
     window: { addEventListener: (name, callback) => { listeners[name] = callback; } } });
   vm.runInContext(gameSource, context);
-  return { context, document, elements, listeners, scripts, canvasListeners };
+  return { context, document, elements, listeners, scripts, canvasListeners, contextRequests };
 }
+
+test('Flappy Bird checks WebGL2 on a separate canvas before loading the game', () => {
+  const page = gameRunner();
+  assert.deepEqual(page.contextRequests, ['webgl2']);
+  assert.equal(page.scripts.length, 1);
+  assert.equal(page.context.Module.canvas, page.elements.canvas);
+});
+
+test('Flappy Bird missing or throwing WebGL2 context blocks module loading with requirements', () => {
+  for (const options of [{ webgl2: false }, { contextError: true }]) {
+    const page = gameRunner(options);
+    assert.deepEqual(page.contextRequests, ['webgl2']);
+    assert.equal(page.scripts.length, 0);
+    assert.equal(page.document.documentElement.dataset.status, 'fail');
+    assert.equal(page.elements['game-message'].hidden, false);
+    assert.match(page.elements['game-message'].textContent, /Needs memory64, Wasm exceptions, JSPI and WebGL2/);
+    assert.match(page.elements['game-message'].textContent, /WebGL2 is unavailable/);
+    assert.match(page.elements.stdout.textContent, /WebGL2 is unavailable/);
+  }
+});
 
 
 test('the page version stamp reaches flappy-bird.js and flappy-bird.wasm', () => {

@@ -1,0 +1,121 @@
+<!doctype html>
+<!-- AI-assisted research fork site. -->
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Research · jank-wasm</title>
+<link rel="stylesheet" href="style.css">
+<header class="bar">
+  <a class="name" href="index.html">jank-wasm</a>
+  <nav><a href="research.html" aria-current="page">Research</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md#one-command-native--wasm">Build</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md">Notes</a><a href="https://github.com/h0rv/jank-wasm">GitHub</a></nav>
+</header>
+<main>
+  <h1>Research</h1>
+  <p>This fork shows that jank programs can be compiled ahead of time to WebAssembly and run in the browser with garbage collection on. The demos on the <a href="index.html">main page</a> are the evidence: an unchanged official jank game and an interactive example, both built from the same source as their native binaries.</p>
+  <p>It is a proof of concept, not production support. This page describes how it works, where it is weak, and what would come next.</p>
+
+  <h2>What was shown</h2>
+  <table>
+    <thead><tr><th>Claim</th><th>Evidence</th></tr></thead>
+    <tbody>
+      <tr><td>jank compiles to wasm64 and runs in Chrome</td><td>Both demos on the main page, GC on.</td></tr>
+      <tr><td>Unchanged jank source</td><td>Flappy Bird is byte-identical to jank's official example at <code>a013d8d</code>, checked by hash.</td></tr>
+      <tr><td>C++ interop works on Wasm</td><td>The game includes <code>raylib.h</code> and <code>raygui.h</code> and calls them through <code>cpp/</code> forms, as on native.</td></tr>
+      <tr><td>GC keeps live objects alive</td><td>14 lifetime cases pass natively and on wasm64 with the spill pass. Static-only rooting fails the caller-local cases.</td></tr>
+      <tr><td>One command builds native and Wasm</td><td><code>./jank-build build PROJECT</code>, for any project with a <code>jank-build.json</code>.</td></tr>
+      <tr><td>Other targets</td><td>wasm32 (Emscripten, Node) and wasm32-wasip1 (Wasmtime) run the spike for 20 of 20 entries with GC on.</td></tr>
+    </tbody>
+  </table>
+  <p>jank's own compiler test suite has not been run under Wasm. Native runs of it pass (130 of 130 cases, 870 jank files, 9 skipped).</p>
+
+  <h2>How it works</h2>
+  <p>jank already compiles Clojure to C++. The fork builds that C++ and jank's runtime with Clang through Emscripten, then rewrites the linked module so the collector can see every live reference.</p>
+  <figure class="block">
+    <figcaption>pipeline</figcaption>
+    <pre>jank source
+  -&gt; C++ (jank AOT, host compiler)
+  -&gt; wasm64 objects (Emscripten, -sMEMORY64=1, Wasm exceptions)
+  -&gt; link with runtime, bdwgc, libc++
+  -&gt; wasm-opt --flatten --spill-pointers
+             --reorder-locals --coalesce-locals --reorder-locals
+  -&gt; app.wasm + app.js</pre>
+  </figure>
+
+  <h3>Garbage collection</h3>
+  <p>jank uses Boehm GC (bdwgc), which finds live objects by scanning memory. On Wasm it can scan linear memory but not Wasm locals or the operand stack, and under Emscripten it registers no static data. Both gaps lose live objects.</p>
+  <ul>
+    <li><b>Static data.</b> Each app registers <code>__global_base..__data_end</code> with <code>GC_add_roots</code> before startup. Generated module loaders also register their lifted vars and constants. The gap was found by instrumenting startup: a reader-options map cached in a C++ static was collected and its memory reused.</li>
+    <li><b>Locals.</b> Binaryen's <code>--spill-pointers</code> copies live pointer-width locals to the shadow stack around each call, where bdwgc scans them. It does not know which values are jank references; on wasm64 it spills every <code>i64</code> that is live across a call. This is conservative, which suits a conservative collector. <code>--flatten</code> runs first so operand-stack values become locals. A small Binaryen patch makes the shadow stack 64-bit and restores it on exceptional exit.</li>
+    <li><b>Exceptions.</b> C++ exception storage is not scanned. Thrown jank objects and errors are held in runtime-owned root cells through throw, rethrow and copied <code>exception_ptr</code>s.</li>
+  </ul>
+
+  <h3>Browser loop</h3>
+  <p>The game keeps its blocking <code>while (!WindowShouldClose())</code> loop. raylib's web build sleeps inside <code>WindowShouldClose</code>; the build links with JSPI so that call suspends to the browser and resumes on the next frame. A small C++ driver registers the static roots and wraps <code>EndDrawing</code> for stats. The live example instead returns to the browser after each chunk, and the driver collects there, on an empty stack.</p>
+
+  <h3>Changes to jank</h3>
+  <p>Against the upstream merge base, <code>compiler+runtime/</code> has 88 files changed (+2,199 / −423), 851 of the added lines are tests.</p>
+  <table>
+    <thead><tr><th>Area</th><th>Change</th></tr></thead>
+    <tbody>
+      <tr><td>Build</td><td>Host and target separation, target JSON, bdwgc and Folly patches for Wasm.</td></tr>
+      <tr><td>Code generation</td><td>5 files, +136 / −41: AOT target config and root registration for lifted vars and constants.</td></tr>
+      <tr><td>Object model</td><td><code>oref.hpp</code>: NaN boxing only with 64-bit pointers. wasm32 uses raw pointers and heap-boxed numbers.</td></tr>
+      <tr><td>Runtime</td><td>26 files: exception root ownership, platform guards and allocation fixes.</td></tr>
+    </tbody>
+  </table>
+  <p>The spill pass, the static-root drivers and the build wrapper live outside jank, in the fork's <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/jank-wasm">experiment directory</a>.</p>
+
+  <h2>Performance</h2>
+  <p>Warm medians in milliseconds over 10 samples, from one <code>.cljc</code> file (<a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/examples/bench-cljc/REPORT.md">report</a>). <i>wasm64 unsafe</i> turns GC off and skips the spill pass; it is a measurement control, not a usable build.</p>
+  <div class="scroll"><table>
+    <thead><tr><th>Kernel</th><th>ClojureScript</th><th>jank native</th><th>wasm64</th><th>wasm64 unsafe</th></tr></thead>
+    <tbody>
+      <tr><td><code>fib27</code></td><td>7.07</td><td>1.19</td><td>78.66</td><td>3.12</td></tr>
+      <tr><td><code>vector100k</code></td><td>9.33</td><td>17.26</td><td>49.83</td><td>26.63</td></tr>
+      <tr><td><code>map100k</code></td><td>39.17</td><td>46.70</td><td>115.72</td><td>85.53</td></tr>
+      <tr><td><code>lazy100k</code></td><td>2.86</td><td>10.97</td><td>55.79</td><td>27.46</td></tr>
+      <tr><td><code>strings1k</code></td><td>0.08</td><td>0.28</td><td>1.74</td><td>1.04</td></tr>
+      <tr><td><code>sort5k</code></td><td>1.13</td><td>1.67</td><td>9.44</td><td>5.76</td></tr>
+    </tbody>
+  </table></div>
+  <ul>
+    <li>wasm64 is slower than ClojureScript on every kernel. Native jank is faster only on <code>fib27</code>.</li>
+    <li>On <code>fib27</code>, which allocates nothing, 96% of the wasm64 time is the flatten and spill pipeline (3.2 ms without it, 76.7 ms with it).</li>
+    <li>On the other kernels the unsafe build is still slower than ClojureScript. About half of the gap is in the runtime's allocation and sequence paths, not the spill pass.</li>
+    <li>The separate costs of memory64, Wasm exceptions and var or protocol dispatch were not measured. wasm32 and wasm64 were not timed on the same kernels.</li>
+  </ul>
+
+  <h3>Size</h3>
+  <table>
+    <thead><tr><th>File</th><th>Raw</th><th>gzip -9</th><th>Brotli 11</th></tr></thead>
+    <tbody>
+      <tr><td><code>live.wasm</code></td><td>19.6 MB</td><td>2.75 MB</td><td>1.93 MB</td></tr>
+      <tr><td><code>flappy-bird.wasm</code></td><td>20.3 MB</td><td>2.89 MB</td><td>2.05 MB</td></tr>
+    </tbody>
+  </table>
+  <p>Most of each module is shared: clojure.core, the runtime, bdwgc and libc++. How much of that is dead code has not been measured.</p>
+
+  <h2>Known gaps</h2>
+  <ul>
+    <li>Rooting is tested, not proven. Pointer-derived values held as <code>i32</code> or <code>f64</code> on wasm64 are not spilled, and no audit shows they are dead at every call that can collect.</li>
+    <li>Native C++ exceptions that hold GC-managed fields are not rooted.</li>
+    <li>Not tested: <code>std::function</code> captures, GC during a JSPI suspension, recursion deeper than 32 frames, long sessions.</li>
+    <li>wasm32 has not been run through the 14-case lifetime matrix.</li>
+    <li>Ahead of time only. No REPL, eval or threads.</li>
+    <li><code>emscripten::val</code> through jank's C++ interop has not been tried. The demos use <code>EM_ASM</code> and Emscripten's C APIs.</li>
+  </ul>
+
+  <h2>Next steps</h2>
+  <table>
+    <thead><tr><th>Step</th><th>Blocker and work</th></tr></thead>
+    <tbody>
+      <tr><td>Run jank's test suite under Wasm</td><td>The suite runs through the native host. It needs a Node runner for the doctest and jank-file tests against the wasm64 build, with GC on. This is the most direct way to find rooting and platform bugs, and the first thing to do.</td></tr>
+      <tr><td>Remove the spill cost</td><td>The spill pass cannot tell jank references from integers. The compiler knows which values are references, so it can keep its own root frames or emit typed arithmetic that holds no references, and the spill pass is no longer needed. Collection kernels also need runtime work: chunked ranges, fewer copies in sort and string building.</td></tr>
+      <tr><td>Package one Wasm command</td><td><code>jank-build</code> works but needs Docker, a patched Binaryen, downloaded Emscripten and Node, and per-app root drivers. A real <code>jank</code> target would ship the runtime archive, apply the pass and register roots itself.</td></tr>
+      <tr><td>Measure size</td><td>Attribute module size by component, then try LTO and <code>wasm-opt</code> dead-code removal.</td></tr>
+    </tbody>
+  </table>
+  <p>Full evidence, commands and earlier failed approaches are in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md">experiment notes</a>.</p>
+</main>
+<footer>Research fork, kept out of upstream jank. Code and text written with AI assistance.</footer>
+</html>

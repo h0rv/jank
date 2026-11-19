@@ -1,4 +1,0 @@
-#!/usr/bin/env bash
-# AI-assisted research entry point; no global tool installation.
-set -euo pipefail
-exec "$(dirname "$(realpath "$0")")/jank-build" "$@"

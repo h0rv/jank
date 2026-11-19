@@ -1,0 +1,88 @@
+<!doctype html>
+<!-- AI-assisted research fork site. -->
+<html lang="en" data-status="running">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>jank-wasm</title>
+<link rel="stylesheet" href="style.css">
+<header class="bar">
+  <a class="name" href="index.html">jank-wasm</a>
+  <nav><a href="research.html">Research</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md#one-command-native--wasm">Build</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md">Notes</a><a href="https://github.com/h0rv/jank-wasm">GitHub</a></nav>
+</header>
+<main>
+  <h1>jank-wasm</h1>
+  <p>A research fork of <a href="https://github.com/jank-lang/jank">jank</a> that compiles Clojure ahead of time to WebAssembly.</p>
+
+  <h2>Flappy Bird</h2>
+  <p>A raylib game compiled from the same jank source for native and wasm64.</p>
+  <p>Click New game, then hold Space to rise; release to fall. P pauses, Enter returns to the menu.</p>
+  <iframe class="game-frame" src="flappy-bird.html" title="Live Flappy Bird game" loading="eager"></iframe>
+  <noscript><p>Requires JavaScript, memory64, Wasm exceptions, JSPI and WebGL2.</p></noscript>
+  <p class="note">Requires memory64, Wasm exceptions, JSPI and WebGL2. Runs in current Chrome (tested with Chrome 156).</p>
+  <p><a href="https://github.com/jank-lang/jank/tree/a013d8dfe6b6ab18618ac20d73a5e99f50af2433/example/gui/flappy-bird">jank's official flappy-bird example</a>, with unchanged source (<a href="flappy-bird-LICENSE">MPL-2.0</a>). <a href="flappy-bird.jank">Source</a> · <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/jank-wasm/examples/flappy-bird">Build notes</a>.</p>
+  <figure class="block">
+    <figcaption>src/org/jank_lang/example/flappy_bird.jank</figcaption>
+    <pre data-lang="clojure">(while (cpp/! (cpp/WindowShouldClose))
+  (let [state (step-frame global-state)
+        _ (cpp/BeginDrawing)
+        state (draw-frame! state)
+        _ (cpp/EndDrawing)]
+    (def global-state state)))</pre>
+  </figure>
+
+  <h2>Live example</h2>
+  <p>Press Run. The compiled jank module running in this tab counts primes below the number you give it, 4,000 candidates per animation frame, and prints a line after each chunk. Run it again with another number at any time.</p>
+  <figure class="block">
+    <figcaption>examples/live-demo/src/live/core.jank</figcaption>
+    <pre data-lang="clojure">(defn prime? [n]
+  (and (&gt; n 1)
+       (loop [d 2]
+         (cond
+           (&gt; (* d d) n) true
+           (zero? (rem n d)) false
+           :else (recur (inc d))))))
+
+(defn step [{:keys [from limit found]}]
+  (let [to (min limit (+ from chunk-size))]
+    {:from to
+     :limit limit
+     :found (+ found (count (filter prime? (range from to))))}))</pre>
+  </figure>
+  <form class="input" id="run-form">
+    <label for="input">Count primes below</label>
+    <input id="input" type="text" inputmode="numeric" value="200000" autocomplete="off" spellcheck="false">
+    <button id="run" type="submit" disabled>Run</button>
+  </form>
+  <figure class="block output" aria-label="Live example output">
+    <figcaption><span>output</span><span id="status" role="status">loading live.wasm</span></figcaption>
+    <pre id="result" aria-live="polite"></pre>
+    <details><summary>Runtime log</summary><pre id="stdout"></pre></details>
+  </figure>
+  <p class="note" id="stats">The module has not started yet.</p>
+  <noscript><p>Requires JavaScript, memory64 and Wasm exceptions.</p></noscript>
+  <p class="note">Requires memory64 and Wasm exceptions. Runs in current Chrome (tested with Chrome 156). Compiled ahead of time; no REPL or eval. See the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md#one-command-native--wasm">build notes</a>.</p>
+
+  <h2>Status</h2>
+  <table>
+    <thead><tr><th>Target</th><th>Result</th></tr></thead>
+    <tbody>
+      <tr><td>wasm64, Emscripten, browser and Node</td><td>Runs with explicit static roots and a Binaryen spill pass. This page.</td></tr>
+      <tr><td>wasm32, Emscripten, Node</td><td>Runs the spike with the same roots and spill pass, 20 of 20 runs with GC on.</td></tr>
+      <tr><td>wasm32-wasip1, Wasmtime</td><td>Runs the spike, 20 of 20 runs with GC on. nREPL is left out.</td></tr>
+      <tr><td>Exceptions</td><td>The runtime roots thrown jank objects and errors, including rethrows and copied <code>exception_ptr</code>s.</td></tr>
+      <tr><td>Speed</td><td>Slower than ClojureScript on most <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/examples/bench-cljc/REPORT.md">benchmark kernels</a>; native <code>fib27</code> is faster.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>Limits</h2>
+  <ul>
+    <li>Ahead of time only. No REPL, eval or general browser API layer, and no threads.</li>
+    <li>Startup fails without the explicit static roots. General GC safety is not proven.</li>
+    <li>Native exceptions that hold GC-managed objects are not rooted.</li>
+    <li>This is not general Wasm support for jank and is not part of upstream jank.</li>
+  </ul>
+  <p>How it works, its gaps and next steps are on the <a href="research.html">research page</a>. Details and evidence are in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md">experiment notes</a>.</p>
+</main>
+<footer>Research fork, kept out of upstream jank. Code and text written with AI assistance.</footer>
+<script src="runner.js"></script>
+</html>

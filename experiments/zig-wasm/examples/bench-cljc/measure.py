@@ -23,6 +23,10 @@ CLJS = '1.12.145'  # Latest stable listed at clojurescript.org/news on 2026-11-1
 CLJS_SHA256 = 'fe33197a3e0e8ca9d2c52c3b4413f216ca309a0d67b4cdffe919c236c7f19f0a'
 EXPECTED = dict(fib27=196418, vector100k=4999950000, map100k=5000050000,
                 lazy100k=2500050000, strings1k=7889, sort5k=41666665000)
+MEM2_FEATURES = ['--mvp-features', '--enable-bulk-memory', '--enable-bulk-memory-opt',
+                 '--enable-call-indirect-overlong', '--enable-exception-handling',
+                 '--enable-memory64', '--enable-multivalue', '--enable-mutable-globals',
+                 '--enable-nontrapping-float-to-int', '--enable-reference-types', '--enable-sign-ext']
 SPEC = importlib.util.spec_from_file_location('jank_build', ROOT / 'scripts/jank-build.py')
 jb = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = jb
@@ -31,8 +35,13 @@ jb.LOGS = OUT
 
 
 def wasm_file(bits, variant, suffix):
-    prefix = 'wasm32-' if bits == '32' else ''
+    prefix = f'wasm{bits}-' if bits != '64' else ''
     return OUT / f'{prefix}{variant}.{suffix}'
+
+
+def target_parts(target):
+    group, variant = target.rsplit('-', 1)
+    return group.removeprefix('wasm'), variant
 
 
 def prerequisites_wasm32():
@@ -129,7 +138,7 @@ def build_cljs():
         'console.log("FIRST_ENTRY ms=" + (performance.now()-start));\n')
 
 
-def build_jank(platform, state):
+def build_jank(platform, state, mem2=False):
     project = jb.load_project(PROJECT)
     stage = project.out / f'stage-{platform}'
     if stage.exists():
@@ -161,11 +170,31 @@ def build_jank(platform, state):
         command(f'cpp-{i}', [*flags, '-O2', '-g', '-c', source, '-o', obj], cwd=cwd)
         objects.append(obj)
     pre = OUT / 'pre.js'
-    pre.write_text('Module.preRun = [function() {console.log("STARTUP ms=" + process.uptime()*1000);}];\n')
-    command('link', [flags[0], '-O2', '-g', '--profiling-funcs', *(['-sMEMORY64=1'] if bits == '64' else []),
+    pre.write_text('Module.preRun = [function() {console.log("STARTUP ms=" + '
+                   '(typeof process !== "undefined" ? process.uptime()*1000 : performance.now()));}];\n')
+    link = [flags[0], '-O2', '-g', '--profiling-funcs', *(['-sMEMORY64=1'] if bits == '64' else []),
         '-fwasm-exceptions', '-sALLOW_MEMORY_GROWTH=1', '-sEXIT_RUNTIME=1', '-sSTACK_SIZE=4194304',
         '--pre-js', pre, *objects, target / 'libjank-static-runtime.a',
-        '-Wl,--error-limit=0', '-o', wasm_file(bits, 'unsafe', 'js')])
+        '-Wl,--error-limit=0', '-o', wasm_file(bits, 'unsafe', 'js')]
+    command('link', link)
+    if mem2:
+        mode2 = ['-sMEMORY64=2' if x == '-sMEMORY64=1' else x for x in link]
+        mode2[-1] = OUT / 'mem2-reference.js'
+        command('link-mem2', mode2)
+
+
+def prepare_mem2(variant):
+    source = wasm_file('64', variant, 'wasm')
+    output = wasm_file('64-mem2', variant, 'wasm')
+    optimizer = ROOT / '.tools/gc-wasm/emsdk/upstream/bin/wasm-opt'
+    run(f'mem2-{variant}-lower', jb.docker(optimizer, source,
+        '--memory64-lowering', '--table64-lowering',
+        '--zero-filled-memory', '--pass-arg=directize-initial-contents-immutable',
+        '-g', *MEM2_FEATURES, '-o', output))
+    wasm_file('64-mem2', variant, 'js').write_text(
+        (OUT / 'mem2-reference.js').read_text().replace('mem2-reference.wasm', output.name))
+    run(f'mem2-{variant}-verify', jb.docker('python3', ROOT / 'scripts/verify-bench-mem2.py',
+        ROOT, OUT / 'mem2-reference.wasm', output, source, OUT / 'unsafe.wasm', variant))
 
 
 def spill(bits='64'):
@@ -189,7 +218,7 @@ def execute(target, node):
                                 capture_output=True, text=True, timeout=600)
         return json.loads(result.stdout)
     file = (OUT / 'cljs-run.cjs' if target == 'cljs-js' else
-            wasm_file(target.split('-')[0].removeprefix('wasm'), target.split('-')[1], 'js'))
+            wasm_file(*target_parts(target), 'js'))
     args = [node, file, *(['unsafe-no-gc'] if target.endswith('-unsafe') else [])]
     start = time.perf_counter()
     result = subprocess.run(list(map(str, args)), capture_output=True, text=True, timeout=600)
@@ -236,7 +265,7 @@ def markdown(data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--targets', nargs='+', choices=['cljs-js', 'native', 'wasm64-spill', 'wasm64-unsafe', 'wasm32-spill', 'wasm32-unsafe'],
+    parser.add_argument('--targets', nargs='+', choices=['cljs-js', 'native', 'wasm64-spill', 'wasm64-unsafe', 'wasm32-spill', 'wasm32-unsafe', 'wasm64-mem2-spill', 'wasm64-mem2-unsafe'],
                         default=['cljs-js', 'native', 'wasm64-spill', 'wasm64-unsafe'])
     parser.add_argument('--skip-build', action='store_true')
     args = parser.parse_args()
@@ -265,6 +294,7 @@ def main():
         data['metadata']['emsdk'] = sdk.read_text().strip() if sdk.exists() else 'not installed'
     data['metadata']['cljs_jar_sha256'] = CLJS_SHA256
     built = set()
+    spilled = set()
     failed = {}
     for target in args.targets:
         row = dict(compile='NOT RUN', link='NOT RUN', execute='NOT RUN', correctness='NOT CHECKED')
@@ -280,17 +310,22 @@ def main():
                 raise RuntimeError(message)
             if not args.skip_build and group not in built:
                 try:
-                    build_cljs() if group == 'cljs-js' else build_jank(group, state)
+                    build_cljs() if group == 'cljs-js' else build_jank(group, state,
+                        mem2=group == 'wasm64' and any('mem2' in t for t in args.targets))
                 except Exception as error:
                     failed[group] = str(error), dict(state)
                     raise
                 built.add(group)
             row.update(compile='PASS', link='PASS' if group != 'cljs-js' else 'N/A (Closure advanced)')
-            if target.endswith('-spill') and not args.skip_build:
+            if target.endswith('-spill') and not args.skip_build and group not in spilled:
                 state['phase'] = 'transform'
                 spill(group.removeprefix('wasm'))
+                spilled.add(group)
+            if 'mem2' in target and not args.skip_build:
+                state['phase'] = 'transform'
+                prepare_mem2(target_parts(target)[1])
             if target.startswith('wasm'):
-                row['module_bytes'] = wasm_file(group.removeprefix('wasm'), target.split('-')[1], 'wasm').stat().st_size
+                row['module_bytes'] = wasm_file(*target_parts(target), 'wasm').stat().st_size
             state['phase'] = 'execute'
             sample = execute(target, node)
             (OUT / f'{target}-run.log').write_text(sample['output'])

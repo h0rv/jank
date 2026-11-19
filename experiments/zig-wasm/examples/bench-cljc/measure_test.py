@@ -4,9 +4,14 @@ import unittest
 from unittest.mock import patch
 from pathlib import Path
 import tempfile
+import importlib.util
 
 sys.dont_write_bytecode = True
 import measure
+
+spec = importlib.util.spec_from_file_location('verify_mem2', measure.ROOT / 'scripts/verify-bench-mem2.py')
+verify_mem2 = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(verify_mem2)
 
 
 class ParserTests(unittest.TestCase):
@@ -28,7 +33,7 @@ class ParserTests(unittest.TestCase):
             measure.parse('', 0)
 
     def test_wasm_variants(self):
-        for bits in ('32', '64'):
+        for bits in ('32', '64', '64-mem2'):
             for variant in ('spill', 'unsafe'):
                 target = f'wasm{bits}-{variant}'
                 disabled = variant == 'unsafe'
@@ -76,6 +81,50 @@ class ParserTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, 'build failed'):
                 measure.prerequisites_wasm32()
             self.assertEqual(run.call_count, 1)
+
+    def test_mem2_lowering(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(measure, 'OUT', Path(directory)), \
+                patch.object(measure, 'run') as run:
+            (Path(directory) / 'mem2-reference.js').write_text('mem2-reference.wasm')
+            measure.prepare_mem2('spill')
+            command = list(map(str, run.call_args_list[0].args[1]))
+            self.assertIn(str(Path(directory) / 'spill.wasm'), command)
+            self.assertIn('--memory64-lowering', command)
+            self.assertIn('--table64-lowering', command)
+            self.assertIn('--mvp-features', command)
+            self.assertIn('--enable-exception-handling', command)
+            self.assertNotIn('--all-features', command)
+            self.assertNotIn('--spill-pointers', command)
+            self.assertEqual((Path(directory) / 'wasm64-mem2-spill.js').read_text(),
+                             'wasm64-mem2-spill.wasm')
+
+    def test_mem2_verification(self):
+        fixture = '''(module
+ (import "env" "f" (func $f (param i64) (result i32)))
+ (memory $0 1 2)
+ (export "memory" (memory $0))
+ (export "entry" (func $entry))
+ (func $entry (param $0 i64) (result i32)
+  (i64.store (i32.const 0) (i64.const 0))
+  (memory.fill (i32.const 0) (i32.const 0) (i32.const 0))
+  (global.set $__stack_pointer (i64.const 0))
+ )
+)
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'module.wat'
+            path.write_text(fixture)
+            final = verify_mem2.inspect_wat(path)
+            source = dict(final, memory64=True)
+            unsafe = dict(final, counts=dict.fromkeys(final['counts'], 0))
+            self.assertEqual(verify_mem2.verify(final, final, source, unsafe, 'spill')['abi'], 'PASS')
+            with self.assertRaisesRegex(ValueError, 'Missing spill'):
+                verify_mem2.verify(final, final, source, final, 'spill')
+            with self.assertRaisesRegex(ValueError, 'signatures differ'):
+                verify_mem2.verify(dict(final, imports={}), final, source, unsafe, 'spill')
+            path.write_text('')
+            with self.assertRaisesRegex(ValueError, 'Empty module'):
+                verify_mem2.inspect_wat(path)
 
     def test_real_checksum(self):
         valid = self.fixture().replace('checksum=4999950000', 'checksum=4.99995e9')

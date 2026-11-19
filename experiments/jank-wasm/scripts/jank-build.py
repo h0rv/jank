@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 """AI-assisted native + experimental memory64 application driver."""
+from __future__ import annotations
+
 import argparse
 import contextlib
 import hashlib
@@ -27,6 +29,53 @@ ZIG = TOOLS / 'zig-x86_64-linux-0.17.1/zig'
 NODE = TOOLS / 'node-v26.13.1-linux-x64/bin/node'
 MARKERS = ('jank -> Zig: scalar and wide result checks passed',
            'jank -> Zig: borrowed-buffer checks passed')
+PLAYWRIGHT_VERSION = '1.58.2'
+
+
+def preflight():
+    if sys.version_info < (3, 10):
+        raise RuntimeError('Python 3.10+ is required')
+    missing = [tool for tool in ('docker', 'git', 'curl') if not shutil.which(tool)]
+    if missing:
+        raise RuntimeError('Missing host prerequisites: ' + ', '.join(missing))
+    result = subprocess.run(['docker', 'info'], capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError('Docker daemon unreachable; start Docker and check your permissions')
+
+
+def resolve_chrome():
+    override = os.environ.get('CHROME')
+    if override:
+        found = shutil.which(override)
+        if found:
+            return found
+        raise RuntimeError(f'CHROME is not executable: {override}')
+    for name in ('google-chrome', 'chromium'):
+        found = shutil.which(name)
+        if found:
+            return found
+    for path in sorted((TOOLS / 'playwright').glob('chromium-*/chrome-linux*/chrome'), reverse=True):
+        if os.access(path, os.X_OK):
+            return str(path)
+    raise RuntimeError('Chrome not found; run ./jank-build setup --browser')
+
+
+def submodule_status():
+    status = subprocess.check_output(['git', '-C', REPO, 'submodule', 'status', '--recursive'], text=True)
+    return hashlib.sha256(status.encode()).hexdigest(), all(
+        line.startswith(' ') for line in status.splitlines())
+
+
+def ensure_submodules():
+    stamp = ROOT / 'artifacts/submodules.sha256'
+    digest, ready = submodule_status()
+    if ready and stamp.is_file() and stamp.read_text() == digest:
+        return
+    logged('submodules', ['git', '-C', REPO, 'submodule', 'update', '--init', '--recursive'])
+    digest, ready = submodule_status()
+    if not ready:
+        raise RuntimeError('Submodules are not at their pinned revisions')
+    stamp.write_text(digest)
 
 
 @dataclass(frozen=True)
@@ -187,6 +236,7 @@ def container():
 
 
 def prerequisites(project):
+    preflight()
     (ROOT / 'artifacts/tmp').mkdir(parents=True, exist_ok=True)
     TOOLS.mkdir(exist_ok=True)
     container()
@@ -195,7 +245,7 @@ def prerequisites(project):
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if probe.returncode:
         logged('container', docker('bash', ROOT / 'scripts/setup-app-container.sh', root=True))
-    logged('submodules', ['git', '-C', REPO, 'submodule', 'update', '--init', '--recursive'])
+    ensure_submodules()
     for tool, url, archive in [
         *([(ZIG, 'https://ziglang.org/download/0.17.1/zig-x86_64-linux-0.17.1.tar.xz', 'zig.tar.xz')]
           if project.zig is not None else []),
@@ -203,7 +253,7 @@ def prerequisites(project):
     ]:
         if not tool.is_file():
             logged(archive, ['curl', '-fL', '--retry', '2', url, '-o', TOOLS / archive])
-            command(['tar', '-xJf', TOOLS / archive, '-C', TOOLS])
+            command(docker('tar', '-xJf', TOOLS / archive, '-C', TOOLS))
     if project.zig is not None and subprocess.check_output([ZIG, 'version'], text=True).strip() != '0.17.1':
         raise RuntimeError('Zig must be exactly 0.17.1')
     sdk = TOOLS / 'gc-wasm/emsdk'
@@ -244,7 +294,7 @@ def prerequisites(project):
                 print(f'Preserving obsolete private Binaryen source at {backup}', flush=True)
                 source.rename(backup)
         if not source.is_dir():
-            command(['tar', '-xzf', archive, '-C', TOOLS])
+            command(docker('tar', '-xzf', archive, '-C', TOOLS))
         reverse = subprocess.run(['git', '-C', str(source), 'apply', '--reverse', '--check', str(patch)],
                                  env=env, capture_output=True)
         if reverse.returncode:
@@ -254,6 +304,121 @@ def prerequisites(project):
                '-GNinja', '-DCMAKE_BUILD_TYPE=Release', '-DBUILD_TESTS=OFF', '-DBUILD_SHARED_LIBS=OFF'))
         logged('binaryen', docker('cmake', '--build', optimizer.parent.parent, '--target', 'wasm-opt', '-j6'))
         stamp.write_text(digest)
+    ensure_entries(project)
+    for platform in ('native', 'wasm64'):
+        if 'raylib' in project.libraries and not raylib_cached(platform):
+            build_raylib(platform)
+
+
+def build_raylib(platform):
+    probe = subprocess.run(docker('bash', '-c', 'command -v unzip patch >/dev/null'),
+                           capture_output=True)
+    if probe.returncode:
+        logged('raylib-packages', docker('bash', '-c',
+               'apt-get update && apt-get install -y unzip patch', root=True))
+    wrappers = TOOLS / 'app-bin'
+    wrappers.mkdir(exist_ok=True)
+    for tool in ('unzip', 'patch', 'make', 'emcc', 'emar'):
+        path = wrappers / tool
+        args = docker('env', f'EM_CONFIG={TOOLS / "gc-wasm/emsdk/.emscripten"}',
+                      f'PATH={TOOLS / "gc-wasm/emsdk/upstream/emscripten"}:/usr/bin:/bin', tool)
+        args.insert(2, '-i')
+        path.write_text('#!/bin/sh\nexec ' + shlex.join(args) + ' "$@"\n')
+        path.chmod(0o755)
+    logged(f'raylib-{platform}', ['bash', ROOT / 'scripts/build-raylib.sh', platform],
+           env={**os.environ, 'PATH': f'{wrappers}:{os.environ.get("PATH", "")}'})
+
+
+def raylib_cached(platform):
+    output = ROOT / 'artifacts/raylib' / platform
+    inputs = [ROOT / 'scripts/build-raylib.sh', *sorted((ROOT / 'raylib/patches').glob('*.patch'))]
+    hashes = ''.join(hashlib.sha256(path.read_bytes()).hexdigest() + '\n' for path in inputs)
+    digest = hashlib.sha256(hashes.encode()).hexdigest()
+    stamp = output / 'stamp'
+    return (stamp.is_file() and stamp.read_text().strip() == digest and all(
+        (output / 'lib' / f'lib{name}.a').is_file() for name in ('raylib', 'raygui')))
+
+
+def ensure_entries(project):
+    target = ROOT / 'artifacts/build-wasm64'
+    flags, cwd = wasm_compile_flags(json.loads((target / 'compile_commands.json').read_text()))
+    entries = [('sdk/wasm-entry.cpp', 'libjank-wasm-entry.a')]
+    if 'raylib' in project.libraries:
+        entries.append(('scripts/raylib-loop-driver.cpp', 'libjank-wasm-raylib-entry.a'))
+    for source, name in entries:
+        source = ROOT / source
+        archive = target / name
+        if not archive.is_file() or source.stat().st_mtime > archive.stat().st_mtime:
+            obj = archive.with_suffix('.o')
+            logged(name, docker('env', f'EM_CONFIG={TOOLS / "gc-wasm/emsdk/.emscripten"}',
+                                *flags, '-O2', '-g', '-c', source, '-o', obj, workdir=cwd))
+            logged(name + '-archive', docker(pathlib.Path(flags[0]).with_name('emar'), 'rcs', archive, obj))
+
+
+def setup_components(project, browser=False):
+    result = subprocess.run(docker('bash', '-c',
+        'test -x /usr/lib/llvm-23/bin/clang && command -v g++-14 cmake ninja >/dev/null'),
+        capture_output=True)
+    digest, ready = submodule_status()
+    stamp = ROOT / 'artifacts/submodules.sha256'
+    rows = [('container', 'Ubuntu 24.04 / LLVM 23.1.6', pathlib.Path(CONTAINER), result.returncode == 0),
+            ('submodules', 'gitlinks', stamp, ready and stamp.is_file() and stamp.read_text() == digest),
+            ('Node', '26.13.1', NODE, NODE.is_file()),
+            ('emsdk', '7.0.0', TOOLS / 'gc-wasm/emsdk', all(
+                (TOOLS / 'gc-wasm/emsdk' / name).is_file() for name in
+                ('upstream/emscripten/em++', '.emscripten')))]
+    if project.zig is not None:
+        rows.append(('Zig', '0.17.1', ZIG, ZIG.is_file()))
+    for name, path in [('host jank', 'artifacts/build-host/jank'),
+                       ('host phase 1', 'artifacts/build-host/jank-phase-1'),
+                       ('native runtime', 'artifacts/build-target/libjank-static-runtime.a'),
+                       ('host headers', '.tools/host-install/lib/jank/0.1/include/jank/c_api.h'),
+                       ('wasm64 runtime', 'artifacts/build-wasm64/libjank-static-runtime.a'),
+                       ('wasm64 flags', 'artifacts/build-wasm64/compile_commands.json'),
+                       ('wasm entry', 'artifacts/build-wasm64/libjank-wasm-entry.a')]:
+        rows.append((name, 'fork checkout', ROOT / path, (ROOT / path).is_file()))
+    optimizer = ROOT / 'artifacts/build-binaryen/bin/wasm-opt'
+    stamp = optimizer.parent / 'jank-memory64-patch.sha256'
+    digest = hashlib.sha256((ROOT / 'wasm-probe/binaryen-memory64-stack.patch').read_bytes()).hexdigest()
+    rows.append(('Binaryen', 'a9141c8cc + private patch', optimizer,
+                 optimizer.is_file() and stamp.is_file() and stamp.read_text() == digest))
+    if 'raylib' in project.libraries:
+        for platform in ('native', 'wasm64'):
+            rows.append((f'raylib {platform}', '6.0 / raygui 2026.09-5',
+                         ROOT / 'artifacts/raylib' / platform, raylib_cached(platform)))
+        path = ROOT / 'artifacts/build-wasm64/libjank-wasm-raylib-entry.a'
+        rows.append(('raylib entry', 'fork checkout', path, path.is_file()))
+    if browser:
+        try:
+            chrome = resolve_chrome()
+        except RuntimeError:
+            chrome = None
+        rows.append(('Chrome', f'Playwright {PLAYWRIGHT_VERSION} or host',
+                     pathlib.Path(chrome) if chrome else TOOLS / 'playwright', chrome is not None))
+    return rows
+
+
+def setup(app=ROOT, *, check=False, browser=False):
+    preflight()
+    project = load_project(app)
+    before = setup_components(project, browser)
+    if not check:
+        prerequisites(project)
+        if browser:
+            try:
+                resolve_chrome()
+            except RuntimeError:
+                logged('playwright', [NODE.with_name('npx'), '--yes', f'playwright@{PLAYWRIGHT_VERSION}',
+                       'install', 'chromium'], env={**os.environ,
+                       'PATH': f'{NODE.parent}:{os.environ.get("PATH", "")}',
+                       'npm_config_cache': str(TOOLS / 'npm-cache'),
+                       'PLAYWRIGHT_BROWSERS_PATH': str(TOOLS / 'playwright')})
+    rows = before if check else setup_components(project, browser)
+    print('COMPONENT          PINNED VERSION                       CACHED PATH  STATE')
+    for (name, version, path, ready), old in zip(rows, before):
+        state = ('cached' if old[3] or check else 'built') if ready else 'missing'
+        print(f'{name:<18} {version:<36} {path}  {state}')
+    return 0 if all(row[3] for row in rows) else 1
 
 
 def build(app):
@@ -261,10 +426,14 @@ def build(app):
     prerequisites(project)
     if project.root.is_relative_to(OUT):
         raise RuntimeError('Project sources must be outside artifacts/app')
+    digest = build_digest(project)
+    stamp = project.out / 'build.sha256'
+    outputs = [project.out / 'native' / project.name, project.out / 'wasm/index.html',
+               project.out / 'wasm' / f'{project.name}.js', project.out / 'wasm' / f'{project.name}.wasm']
+    if stamp.is_file() and stamp.read_text() == digest and all(path.is_file() for path in outputs):
+        print(f'CACHED: {project.out}')
+        return
     for platform in ('native', 'wasm'):
-        for library in project.libraries:
-            logged(f'{project.name}-{platform}-{library}', ['bash', ROOT / 'scripts' / f'build-{library}.sh',
-                   'native' if platform == 'native' else 'wasm64'])
         stage = project.out / f'stage-{platform}'
         if stage.exists():
             shutil.rmtree(stage)
@@ -290,7 +459,32 @@ def build(app):
             build_native(project, stage, prefix, modules, launcher, run)
         else:
             build_wasm(project, stage, modules, launcher, run)
+    if all(path.is_file() for path in outputs):
+        stamp.write_text(digest)
     print(f'Built {project.out / "native" / project.name}\nBuilt {project.out / "wasm"}')
+
+
+def build_digest(project):
+    digest = hashlib.sha256()
+    excluded = {'artifacts', '.tools', '.git', 'target', 'zig-out', '.zig-cache', '__pycache__'}
+    for base in dict.fromkeys([project.root, *project.include_dirs, ROOT / 'scripts', ROOT / 'sdk', ROOT / 'wasm-probe']):
+        for directory, dirs, files in os.walk(base):
+            dirs[:] = sorted(name for name in dirs if name not in excluded)
+            for name in sorted(files):
+                path = pathlib.Path(directory) / name
+                digest.update(str(path).encode())
+                digest.update(path.read_bytes())
+    for path in [ROOT / 'artifacts/build-target/libjank-static-runtime.a',
+                 ROOT / 'artifacts/build-wasm64/libjank-static-runtime.a',
+                 ROOT / 'artifacts/build-host/jank',
+                 ROOT / 'artifacts/build-binaryen/bin/wasm-opt',
+                 *c_dependencies(project, 'native').archives, *c_dependencies(project, 'wasm').archives]:
+        if path.is_file():
+            stat = path.stat()
+            digest.update(f'{path}:{stat.st_size}:{stat.st_mtime_ns}'.encode())
+    digest.update(json.dumps(sorted((key, value) for key, value in os.environ.items()
+                                   if key.startswith(('JANK_', 'SPILL_')))).encode())
+    return digest.hexdigest()
 
 
 def generate_sources(project, stage, platform, prefix, run):
@@ -506,9 +700,10 @@ def valid_markers(output, expected=MARKERS):
 
 def browser_check(project=None):
     project = project or load_project()
+    chrome = resolve_chrome()
     with server(project=project) as url:
         profile = ROOT / 'artifacts/app-chrome-profile'
-        result = subprocess.run(['google-chrome', '--headless', '--no-sandbox', '--disable-gpu',
+        result = subprocess.run([chrome, '--headless', '--no-sandbox', '--disable-gpu',
             '--no-first-run', '--disable-dev-shm-usage', f'--user-data-dir={profile}',
             '--virtual-time-budget=30000', '--timeout=60000', '--dump-dom', url],
             capture_output=True, text=True, timeout=90)
@@ -548,10 +743,40 @@ def execute(target, project=None):
     return ok, output
 
 
+def new_project(directory, name=None):
+    root = pathlib.Path(directory).resolve()
+    name = root.name if name is None else name
+    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_-]*', name):
+        raise RuntimeError('New project name must start with a letter and contain letters, digits, _ or -')
+    namespace = name.replace('_', '-') + '.core'
+    source = root / 'src' / name.replace('-', '_') / 'core.jank'
+    config = root / 'jank-build.json'
+    if config.exists() or config.is_symlink() or source.exists() or source.is_symlink():
+        raise RuntimeError('Refusing to overwrite existing project files')
+    expected = f'Hello from {name}!'
+    source.parent.mkdir(parents=True, exist_ok=True)
+    with config.open('x') as stream:
+        json.dump({'name': name, 'main': namespace, 'jank': 'src', 'expect': [expected]}, stream, indent=2)
+        stream.write('\n')
+    with source.open('x') as stream:
+        stream.write(f';; AI-assisted pure-jank scaffold.\n(ns {namespace})\n\n'
+                     f'(defn -main [& _]\n  (println {json.dumps(expected)}))\n')
+    print(f'Created {root}; run ./jank-build check {root}')
+
+
 def main():
+    if sys.version_info < (3, 10):
+        raise RuntimeError('Python 3.10+ is required')
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='action', required=True)
     sub.add_parser('sdk')
+    setup_parser = sub.add_parser('setup')
+    setup_parser.add_argument('--check', action='store_true')
+    setup_parser.add_argument('--browser', action='store_true')
+    setup_parser.add_argument('app_dir', nargs='?', default=str(ROOT))
+    new_parser = sub.add_parser('new')
+    new_parser.add_argument('app_dir')
+    new_parser.add_argument('--name')
     for action in ('build', 'run', 'check', 'serve'):
         action_parser = sub.add_parser(action)
         if action == 'run':
@@ -560,6 +785,11 @@ def main():
             action_parser.add_argument('--port', type=int, default=8765)
         action_parser.add_argument('app_dir', nargs='?', default=str(ROOT))
     args = parser.parse_args()
+    if args.action == 'setup':
+        return setup(args.app_dir, check=args.check, browser=args.browser)
+    if args.action == 'new':
+        new_project(args.app_dir, args.name)
+        return 0
     if args.action == 'sdk':
         command([sys.executable, ROOT / 'sdk/package.py'])
         return 0
@@ -578,7 +808,7 @@ def main():
     elif args.action == 'run' and args.target == 'browser':
         with server(8765, project=project) as url:
             print(f'Opening {url}; Ctrl-C to stop the server', flush=True)
-            subprocess.Popen(['google-chrome', url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            subprocess.Popen([resolve_chrome(), url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             threading.Event().wait()
     else:
         targets = ['native', 'node', 'browser'] if args.action == 'check' else [args.target]

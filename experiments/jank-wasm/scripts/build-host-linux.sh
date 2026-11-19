@@ -40,10 +40,7 @@ case "${1:-host}" in
     ;;
   test) run test bash -c 'cd "$1" && "$2/jank-test"' _ "$SOURCE" "$HOST" ;;
   spike)
-    export JANK="$HOST/jank" ZIG="$ROOT/.tools/zig-x86_64-linux-0.17.1/zig"
-    export ZIG_GLOBAL_CACHE_DIR="$ROOT/.zig-cache/global"
-    run spike bash scripts/check-jank.sh
-    ;;
+    echo 'Zig spike checks have moved to the zig-addon branch' >&2; exit 2 ;;
   target)
     run target-configure cmake -S "$SOURCE" -B "$TARGET" "${common[@]}" \
       -Djank_cross_compile=ON "-Djank_host_compiler=${HOST_COMPILER:-$HOST/jank-phase-1}" \
@@ -52,14 +49,7 @@ case "${1:-host}" in
       --target jank_standalone_static_lib_phase_2
     ;;
   target-spike)
-    mkdir -p artifacts/target-resources
-    ln -sfn "$ROOT/.tools/host-install/lib/jank/0.1/include" artifacts/target-resources/include
-    ln -sfn "$TARGET" artifacts/target-resources/lib
-    export JANK="$HOST/jank" ZIG="$ROOT/.tools/zig-x86_64-linux-0.17.1/zig"
-    export ZIG_GLOBAL_CACHE_DIR="$ROOT/.zig-cache/global"
-    export JANK_RUNTIME_DIR="$ROOT/artifacts/target-resources"
-    run target-spike bash scripts/check-jank-zig-cpp.sh
-    ;;
+    echo 'Zig spike checks have moved to the zig-addon branch' >&2; exit 2 ;;
   install) run install cmake --install "$HOST" ;;
   target-install) run target-install cmake --install "$TARGET" ;;
   *) echo "Usage: $0 {host|test|spike|target|install|target-install|target-spike}" >&2; exit 2 ;;

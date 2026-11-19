@@ -4,6 +4,20 @@ This directory preserves a measured experiment from 2026-11-16. It is AI-assiste
 
 Read the complete handoff prompt at [`../../JANK_WASM_PROMPT.md`](../../JANK_WASM_PROMPT.md).
 
+## Optional Zig add-on
+
+The optional Zig libraries, toolchain probes and spike-only reproduction helpers
+are preserved on [`zig-addon`](https://github.com/h0rv/jank-wasm/tree/zig-addon/experiments/jank-wasm).
+The [Zig guide](https://github.com/h0rv/jank-wasm/blob/zig-addon/experiments/jank-wasm/ZIG.md)
+and its original commands belong to that branch, not this checkout.
+Historical results below (including Zig spike commands and paths) are retained
+as evidence; use the branch's README to reproduce those results.
+Main's default `jank-build` project is now the pure-jank `hello-cljc` example.
+No Zig SDK is downloaded or used on this branch; configs containing `zig`
+are rejected with a pointer to the add-on branch. Mixed C++/WASI/GC fixtures
+are retained, not removed as Zig-only code. The Zig-only jank spike application
+is on the add-on branch; jank's language, compiler and runtime are unchanged.
+
 ## Starting point
 
 The branch starts at PR #1107 head `43ffa8d0a6bce1c17c552c6d46f4d6486dc304ed`. The PR separates a host compiler from a target static runtime and begins moving compiler configuration into JSON. The upstream PR remains authoritative for its current status.
@@ -92,7 +106,7 @@ jank's generated C++ and runtime for Wasm.
 
 `setup` prepares the container, submodules, Node, Emscripten, host compiler,
 runtime and entry archives, patched Binaryen, and any project-requested
-libraries or Zig toolchain. Downloads and outputs stay under `.tools/` and
+C libraries. Downloads and outputs stay under `.tools/` and
 `artifacts/`. Cold setup took about 12 minutes on this VM. Its final table lists
 each component's pinned version, cached path, and `cached`, `built` or `missing`
 state. `setup --check` builds nothing and exits 1 if a component is missing.
@@ -111,7 +125,7 @@ registration, entry code and optional frame configuration at link time.
 The [offline SDK](SDK.md) provides Docker-free offline project builds on
 Linux x86_64 after extraction.
 
-See [Using Zig with jank](ZIG.md) for library integration and measured toolchain trade-offs.
+The optional [Zig integration guide](https://github.com/h0rv/jank-wasm/blob/zig-addon/experiments/jank-wasm/ZIG.md) is maintained on `zig-addon`.
 
 ```sh
 cd experiments/jank-wasm
@@ -124,7 +138,7 @@ cd experiments/jank-wasm
 ```
 
 `build`, `check`, `run` and `serve` accept an optional final project directory, defaulting to this
-experiment's optional Zig interop spike. A project contains `jank-build.json`:
+experiment's pure-jank `hello-cljc` example. A project contains `jank-build.json`:
 
 ```json
 {"name": "hello", "main": "hello.core", "jank": "src",
@@ -133,15 +147,12 @@ experiment's optional Zig interop spike. A project contains `jank-build.json`:
 
 `main` names the namespace whose `-main` runs. Defaults are the directory name
 for `name` and `src` for `jank`; source paths must stay inside the project.
-Omit `zig` for pure-jank projects: no Zig SDK, library build or kernel object
-is needed. Native C++ then uses the container's Clang 23 with libstdc++.
+Projects on this branch use no Zig SDK, library build or kernel object.
+Native C++ uses the container's Clang 23 with libstdc++.
 `expect` is required and contains nonempty exact output
 lines, or an object with `native`, `node`, and `browser` line lists. Checks
 require exit 0 **and** those lines (jank AOT can exit 0 after a failed assert).
-To link an optional Zig library, add `"zig": "native.zig"` (or another root
-source path). For those projects, `build.zig` overrides the generated library
-build and must install both static/shared libraries named `name`; the Wasm kernel compiles
-directly from `zig`. Multi-file Zig imports relative to that root are supported.
+Optional Zig project builds have moved to the `zig-addon` branch.
 Sources are copied into fresh ignored staging for each platform, including all
 transitively emitted jank modules; inputs are not modified. Project names must
 be unique within this checkout's output directory.
@@ -163,8 +174,8 @@ Outputs are `artifacts/app/<name>/native/<name>` and
 `artifacts/app/<name>/wasm/{<name>.js,<name>.wasm,index.html}`. The native executable
 contains the static jank runtime, but still needs Ubuntu 24.04-compatible
 system libraries; it is not a statically linked portable Linux binary.
-Generic Wasm projects run once in `static-roots` mode. The spike config retains
-`"wasm_check": "spike-continuous"`: 20 continuous-GC iterations validated by
+Generic Wasm projects run once in `static-roots` mode. The historical spike on
+`zig-addon` uses `"wasm_check": "spike-continuous"`: 20 continuous-GC iterations validated by
 the existing safepoint checker for Node and browser. The generated page displays
 stdout and provides `#app` for DOM output; it sets `data-status="pass"` and a PASS
 title only after exit 0 and all expected lines. `check` rebuilds the project,
@@ -227,7 +238,7 @@ Docker, Python 3, curl, tar, Git and (for browser commands) `google-chrome`
 must already be available on the host. The wrapper creates/starts the
 `jank-host-build` Ubuntu 24.04 container, installs its documented pinned LLVM
 23.1.6 dependencies **inside the container only**, downloads local Node
-26.13.1/Emscripten 7.0.0 (and Zig 0.17.1 only for projects with `zig`),
+26.13.1/Emscripten 7.0.0,
 initializes pinned submodules, and builds
 missing host/native/Wasm runtime artifacts and the private patched Binaryen.
 Existing prerequisites are reused; app outputs are rebuilt each invocation.

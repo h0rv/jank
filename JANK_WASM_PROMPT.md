@@ -6,7 +6,14 @@ Work in this jank research fork. Continue an existing experiment rather than sta
 
 Read `CONTRIBUTING.md` first. Upstream jank rejects AI-generated external contributions, including code and copy. This branch contains AI-assisted research and examples. Work in this fork only. Do not submit these artifacts upstream, claim they were human-created, remove their provenance to bypass the policy, or post upstream discussions on the user's behalf. Any eventual upstream contribution must comply with the maintainers' policy and receive separate user authorization.
 
-## Goal
+## Branch scope
+
+The optional Zig add-on is preserved on [zig-addon](https://github.com/h0rv/jank-wasm/tree/zig-addon/experiments/jank-wasm).
+The Zig-specific goals, commands and file paths in this historical handoff refer
+to that branch. Main now defaults to the pure-jank `hello-cljc` project and rejects
+Zig project configs. Keep the non-Zig compiler/runtime and mixed research fixtures.
+
+## Historical goal
 
 Make jank a useful native Clojure environment whose application code can call low-level libraries written in Zig. Improve the build process so Zig's compiler tools can compile and link generated C++ and target runtime components. Then establish whether the same application and Zig implementation can run as a WebAssembly module.
 

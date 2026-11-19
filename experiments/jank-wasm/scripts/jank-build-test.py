@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from unittest import mock
 
 sys.dont_write_bytecode = True
@@ -144,7 +145,6 @@ class DriverTests(unittest.TestCase):
             driver.new_project(root)
             project = driver.load_project(root)
             self.assertEqual(project.main, 'hello-world.core')
-            self.assertIsNone(project.zig)
             self.assertEqual(project.expected('native'), ('Hello from hello-world!',))
             source = root / 'src/hello_world/core.jank'
             self.assertIn('(defn -main', source.read_text())
@@ -191,13 +191,14 @@ class DriverTests(unittest.TestCase):
             self.assertFalse(driver.execute('native')[0])
 
     def test_node_validator_failure_fails(self):
+        project = replace(driver.load_project(), wasm_check='spike-continuous')
         result = subprocess.CompletedProcess([], 0, '\n'.join(driver.MARKERS), '')
         rejected = subprocess.CompletedProcess([], 1, 'bad iterations', '')
         with mock.patch.object(driver, 'container'), \
                 mock.patch.object(driver.subprocess, 'run', side_effect=[result, rejected]), \
                 mock.patch.object(pathlib.Path, 'write_text'), \
                 mock.patch.object(pathlib.Path, 'mkdir'):
-            self.assertFalse(driver.execute('node')[0])
+            self.assertFalse(driver.execute('node', project=project)[0])
 
     def test_browser_verdict(self):
         for status, output, exitcode, expected in [
@@ -224,7 +225,6 @@ class ProjectTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = pathlib.Path(self.temp.name)
         (self.root / 'src').mkdir()
-        (self.root / 'native.zig').write_text('')
         self.config = {'main': 'hello.core', 'expect': ['done']}
 
     def load(self):
@@ -267,7 +267,6 @@ class ProjectTests(unittest.TestCase):
         project = self.load()
         self.assertEqual(project.name, self.root.name)
         self.assertEqual(project.jank, self.root / 'src')
-        self.assertIsNone(project.zig)
         self.assertEqual(project.expected('browser'), ('done',))
         self.assertEqual(project.wasm_check, 'single')
         self.assertEqual(project.libraries, ())
@@ -412,21 +411,25 @@ class ProjectTests(unittest.TestCase):
             with self.subTest(text=text), self.assertRaises(RuntimeError):
                 driver.load_project(self.root)
 
-    def test_example_and_spike(self):
-        self.assertEqual(driver.load_project().wasm_check, 'spike-continuous')
+    def test_example_and_default(self):
+        default = driver.load_project()
+        self.assertEqual(default.main, 'hello.core')
+        self.assertEqual(default.jank, driver.ROOT / 'examples/hello-cljc/src')
+        self.assertEqual(default.wasm_check, 'single')
+        self.assertEqual(default.expected('native'), driver.MARKERS)
         project = driver.load_project(driver.ROOT / 'examples/hello-cljc')
         self.assertEqual(project.main, 'hello.core')
-        self.assertIsNone(project.zig)
         self.assertIn('platform: browser', project.expected('browser'))
 
-    def test_optional_zig_source(self):
-        self.config['zig'] = 'native.zig'
-        self.assertEqual(self.load().zig, self.root / 'native.zig')
-        self.assertIsNotNone(driver.load_project().zig)
+    def test_zig_projects_require_addon_branch(self):
+        for value in ('library.zig', '', None, 3):
+            self.config['zig'] = value
+            with self.subTest(value=value), self.assertRaisesRegex(RuntimeError, 'zig-addon'):
+                self.load()
 
     def test_legacy_config_is_not_loaded(self):
         (self.root / 'jank-zig.json').write_text(driver.json.dumps(
-            {**self.config, 'name': 'legacy', 'zig': 'native.zig'}))
+            {**self.config, 'name': 'legacy', 'zig': 'library.zig'}))
         with self.assertRaisesRegex(RuntimeError, 'Cannot read project config'):
             driver.load_project(self.root)
         self.assertEqual(self.load().name, self.root.name)
@@ -446,7 +449,7 @@ class ProjectTests(unittest.TestCase):
                 mock.patch.object(driver.subprocess, 'check_output') as output, \
                 mock.patch.object(pathlib.Path, 'mkdir'), \
                 mock.patch.object(pathlib.Path, 'is_file', autospec=True,
-                                  side_effect=lambda path: path != driver.ZIG), \
+                                  return_value=True), \
                 mock.patch.object(pathlib.Path, 'read_bytes', return_value=b'patch'), \
                 mock.patch.object(pathlib.Path, 'read_text', return_value=digest):
             driver.prerequisites(project)

@@ -67,14 +67,14 @@ class SDKTests(unittest.TestCase):
                 driver.configure()
 
     def test_sdk_rejects_diagnostic_mode_before_staging(self):
-        project = mock.Mock(zig=None, wasm_check='spike-continuous')
+        project = mock.Mock(wasm_check='spike-continuous')
         with self.assertRaisesRegex(RuntimeError, 'Diagnostic'):
             driver.build(project)
 
     def test_sdk_preserves_shared_log_names_and_cpp_launcher(self):
         with tempfile.TemporaryDirectory() as temp:
             root = pathlib.Path(temp)
-            project = mock.Mock(zig=None, wasm_check='single', root=root, out=root / 'dist')
+            project = mock.Mock(wasm_check='single', root=root, out=root / 'dist')
             project.name = 'hello'
             def generate(project, stage, platform, prefix, run):
                 run('launcher', ['env', 'compile', 'hello.core'])

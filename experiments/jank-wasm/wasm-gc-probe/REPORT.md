@@ -1,5 +1,9 @@
 # Wasm GC versus jank's current collector
 
+Zig-specific toolchain results in this historical report are preserved on
+[`zig-addon`](https://github.com/h0rv/jank-wasm/tree/zig-addon/experiments/jank-wasm).
+The main-branch tool checks retain only the Emscripten/Binaryen checks.
+
 AI-assisted research for h0rv/jank-wasm only; no upstream submission. Inspected `main`
 at `0573e30c02f19cba9db406876d76ee1fadf02dc9`; remote
 `research/zig-wasm` is `a2f9916517d67860bce2978bd5d97914d80d7d44`.

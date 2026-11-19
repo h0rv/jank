@@ -153,7 +153,7 @@ def build_jank(platform, state, mem2=False):
         run(f'{project.name}-{platform}-{label}', jb.docker('env',
             f'EM_CONFIG={ROOT / ".tools/gc-wasm/emsdk/.emscripten"}', *args,
             workdir=kwargs.pop('cwd', stage)), **kwargs)
-    modules, launcher = jb.generate_sources(project, stage, platform, stage / 'zig-out', command)
+    modules, launcher = jb.generate_sources(project, stage, platform, stage, command)
     text = launcher.read_text()
     text, count = re.subn(r'\bmain\s*\(', 'bench_entry(', text)
     if count != 1:
@@ -161,7 +161,7 @@ def build_jank(platform, state, mem2=False):
     launcher.write_text(text)
     if platform == 'native':
         launcher.write_text(text + '\n' + (PROJECT / 'timing.cpp').read_text())
-        jb.build_native(project, stage, stage / 'zig-out', modules, launcher, command)
+        jb.build_native(project, stage, stage, modules, launcher, command)
         return
     bits = platform.removeprefix('wasm')
     target = ROOT / f'artifacts/build-wasm{bits}'
@@ -284,7 +284,7 @@ def main():
     data['metadata']['binaryen_patch_sha256'] = hashlib.sha256(
         (ROOT / 'wasm-probe/binaryen-memory64-stack.patch').read_bytes()).hexdigest()
     data['metadata']['java'] = 'Eclipse Temurin JRE 21.0.9+10 (local; system Java 17 is too old for Closure)'
-    data['metadata']['zig'] = 'not used (pure Clojure project; experiment pin remains 0.17.1)'
+    data['metadata']['zig'] = 'not used (optional add-on is on the zig-addon branch)'
     sdk = ROOT / '.tools/gc-wasm/emsdk/upstream/emscripten/emscripten-version.txt'
     data['metadata']['emsdk'] = sdk.read_text().strip() if sdk.exists() else 'not installed'
     prerequisite_error = None

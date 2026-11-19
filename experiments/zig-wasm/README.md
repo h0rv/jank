@@ -1113,6 +1113,25 @@ test, then the runner restarts the bundle at the next unmeasured fixture.
 The driver exits nonzero for failures or missing fixture coverage, excluding
 the suite's declared skips and allowed-failure files.
 
+Observed on Node 26.13.1 with Emscripten 7.0.0:
+
+| Suite | Passed in Wasm | Failed in Wasm | Not run in Wasm |
+|---|---:|---:|---:|
+| C++ doctests (141 native cases) | 133 | 1 | 7 |
+| jank fixtures (870 paths) | 526 | 7 | 337 |
+
+The native control passed all 141 doctests and all 861 non-skipped fixtures.
+The Wasm doctests observed 17 explicit collections. The exception copy/move
+test saw a released payload remain alive; relinking with the scanned C++
+exception-storage wrapper did not change that result. This assertion does
+not distinguish a lingering conservative root from a leak.
+
+Of the fixtures that never ran, the host rejected 317 negative fixtures and
+4 positive fixtures, the target C++ compiler rejected 7, and 9 were suite
+skips. The Wasm failures were 3 unexpected throws, 2 native exceptions, 1
+jank error, and 1 trap. The trapped fixture is a top-level `(recur)`: wrapping
+it in a function changes its context, so the trap is not evidence of a GC bug.
+
 Run the same existing 14-case lifetime probe against each pointer width, with
 static roots and the same spill transform:
 

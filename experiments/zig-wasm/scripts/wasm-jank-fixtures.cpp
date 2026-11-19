@@ -76,7 +76,9 @@ namespace
       {
         return "internal-error";
       }
-      return entered && test.expected == 'f' && error->source != read::source::unknown()
+      return entered
+          && (test.expected == 't'
+              || (test.expected == 'f' && error->source != read::source::unknown()))
         ? "pass"
         : "jank-error";
     }

@@ -1078,6 +1078,61 @@ exit 0; the spike helper correctly returned **1**. Native `jank-test` returned
 **9** skips and **0** failures. No native/compiler/collector source behavior,
 dependency pin, or normal spike assertion was changed.
 
+### Node test suite with Boehm GC
+
+From this directory, build the host, wasm64 runtime, and patched Binaryen with
+the app tooling, then run the test driver:
+
+```sh
+./jank-build build examples/hello-cljc
+.tools/node-v26.13.1-linux-x64/bin/node scripts/wasm-tests.mjs
+```
+
+Use `--suite doctest` for the C++ tests or `--suite files --filter REGEX` for
+a subset of fixture paths. Logs and `results.json` go in a fresh directory under
+`artifacts/wasm64-tests/`. The runner requires Boehm to be enabled, requests
+`GC_set_free_space_divisor(1)`, and verifies explicit collections triggered
+before the first test and every eighth test thereafter. It links with Wasm
+exceptions, registers static data roots, and runs the existing post-link spill
+transform without its optional local-coalescing cleanup. The runner gives
+Node's Wasm calls a larger native stack for the parser's deep-nesting doctests.
+
+The runner compiles the original portable C++ test sources. It does not link
+the native JIT file-test wrapper, the Clang/CppInterOp tests, or the LLVM Support
+hash tests. The generated-throws doctest calls the JIT, so it is filtered out;
+the other exception doctests still run. The separately reported jank-file
+results use the native compiler to wrap the unchanged fixture bodies in
+functions, then run the AOT output in Node. Leading raw C++ declarations remain
+top-level for analysis. This is not a port of the dynamic JIT: reader/analyzer
+rejections, staging-sensitive fixtures, and cases that require runtime source
+evaluation do not have the same coverage as native `eval_file`. In particular,
+a `fail-*` fixture rejected by the host frontend does **not** count as a
+Wasm pass. The results separate passes, failures after entering the Wasm
+driver, and files never run there. A crash is recorded against the last started
+test, then the runner restarts the bundle at the next unmeasured fixture.
+The driver exits nonzero for failures or missing fixture coverage, excluding
+the suite's declared skips and allowed-failure files.
+
+Run the same existing 14-case lifetime probe against each pointer width, with
+static roots and the same spill transform:
+
+```sh
+for step in deps configure build; do
+  docker exec --user "$(id -u):$(id -g)" -e WASM_BITS=32 jank-host-build \
+    bash scripts/build-wasm64-target.sh "$step" || exit
+done
+for bits in 32 64; do
+  docker exec --user "$(id -u):$(id -g)" -e WASM_BITS="$bits" jank-host-build \
+    bash scripts/build-wasm64-target.sh gc-lifetime
+done
+```
+
+Read `artifacts/logs/wasm{32,64}-lifetime.results` and the corresponding
+per-case logs. A passing case must observe a collection and exit cleanly.
+On Node 26.13.1, both widths passed all 14 cases, including the six exception
+cases. The runtime-internal case observed 16 collections on wasm32 and 10 on
+wasm64 while inside the runtime operation.
+
 ### wasm64 tagged-reference collector lifetime matrix
 
 The results in this subsection precede the [memory64 spill follow-up](#wasm64-binaryen-spill-pointers-with-continuous-gc).

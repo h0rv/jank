@@ -213,6 +213,9 @@ PY
   gc-roots)
     run gc-roots python3 "$ROOT/wasm-probe/gc-roots-matrix.py" "$ROOT"
     ;;
+  gc-lifetime)
+    run gc-lifetime python3 "$ROOT/wasm-probe/gc-roots-matrix.py" "$ROOT" "$BITS"
+    ;;
   startup-roots)
     run startup-roots-compile python3 - "$ROOT" "$BITS" "${memory_flags[@]}" <<'PY'
 import json, pathlib, shlex, subprocess, sys
@@ -332,5 +335,5 @@ PY
     grep -Fxq 'jank -> Zig: scalar and wide result checks passed' "artifacts/logs/wasm$BITS-startup-trace-wasm$BITS-default.log"
     grep -Fxq 'jank -> Zig: borrowed-buffer checks passed' "artifacts/logs/wasm$BITS-startup-trace-wasm$BITS-default.log"
     ;;
-  *) echo "Usage: $0 {deps|configure|build|spike|gc-roots|startup-roots|startup-trace|startup-safepoints|startup-spill}" >&2; exit 2 ;;
+  *) echo "Usage: $0 {deps|configure|build|spike|gc-roots|gc-lifetime|startup-roots|startup-trace|startup-safepoints|startup-spill}" >&2; exit 2 ;;
 esac

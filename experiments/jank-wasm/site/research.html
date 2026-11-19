@@ -7,7 +7,7 @@
 <link rel="stylesheet" href="style.css">
 <header class="bar">
   <a class="name" href="index.html">jank-wasm</a>
-  <nav><a href="research.html" aria-current="page">Research</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md#one-command-native--wasm">Build</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">Notes</a><a href="https://github.com/h0rv/jank-wasm">GitHub</a></nav>
+  <nav><a href="research.html" aria-current="page">Research</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md#one-command-native--wasm">Build</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md">Notes</a><a href="https://github.com/h0rv/jank-wasm">GitHub</a></nav>
 </header>
 <main>
   <h1>Research</h1>
@@ -63,10 +63,10 @@
       <tr><td>Runtime</td><td>26 files: exception root ownership, platform guards and allocation fixes.</td></tr>
     </tbody>
   </table>
-  <p>The spill pass, the static-root drivers and the build wrapper live outside jank, in the fork's <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/zig-wasm">experiment directory</a>.</p>
+  <p>The spill pass, the static-root drivers and the build wrapper live outside jank, in the fork's <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/jank-wasm">experiment directory</a>.</p>
 
   <h2>Performance</h2>
-  <p>Warm medians in milliseconds over 10 samples, from one <code>.cljc</code> file (<a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/examples/bench-cljc/REPORT.md">report</a>). <i>wasm64 unsafe</i> turns GC off and skips the spill pass; it is a measurement control, not a usable build.</p>
+  <p>Warm medians in milliseconds over 10 samples, from one <code>.cljc</code> file (<a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/examples/bench-cljc/REPORT.md">report</a>). <i>wasm64 unsafe</i> turns GC off and skips the spill pass; it is a measurement control, not a usable build.</p>
   <div class="scroll"><table>
     <thead><tr><th>Kernel</th><th>ClojureScript</th><th>jank native</th><th>wasm64</th><th>wasm64 unsafe</th></tr></thead>
     <tbody>
@@ -115,7 +115,7 @@
       <tr><td>Measure size</td><td>Attribute module size by component, then try LTO and <code>wasm-opt</code> dead-code removal.</td></tr>
     </tbody>
   </table>
-  <p>Full evidence, commands and earlier failed approaches are in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/README.md">experiment notes</a>.</p>
+  <p>Full evidence, commands and earlier failed approaches are in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md">experiment notes</a>.</p>
 </main>
 <footer>Research fork, kept out of upstream jank. Code and text written with AI assistance.</footer>
 </html>

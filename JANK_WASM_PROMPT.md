@@ -1,6 +1,6 @@
-# Handoff prompt for jank, Zig and WebAssembly
+# Handoff prompt for jank-wasm
 
-Work in this jank research fork. Continue an existing experiment rather than starting a new language implementation. Read this file and `experiments/zig-wasm/README.md` before changing code.
+Work in this jank research fork. Continue an existing experiment rather than starting a new language implementation. Read this file and `experiments/jank-wasm/README.md` before changing code.
 
 ## Contribution boundary
 
@@ -19,7 +19,7 @@ This is compiler/runtime research, not a production-ready web framework project.
 ## Repository and starting revision
 
 - The fork is `https://github.com/h0rv/jank-wasm`.
-- The research branch is `research/zig-wasm`.
+- The original research branch was `research/zig-wasm`.
 - `origin` is the user's fork. `upstream` is `jank-lang/jank`.
 - The branch starts from upstream PR #1107, `https://github.com/jank-lang/jank/pull/1107`.
 - The inspected PR head is `43ffa8d0a6bce1c17c552c6d46f4d6486dc304ed` from `kylc/jank`, branch `cross`.
@@ -55,7 +55,7 @@ At handoff, macOS and Ubuntu release checks pass, but the PR is not fully green.
 
 ## Existing experiment and actual results
 
-All reproduction sources are under `experiments/zig-wasm`. Downloads, generated files and logs belong in its ignored `.tools`, `.zig-cache`, `zig-out` and `artifacts` directories. Do not commit those directories or generated compiler output containing process-local addresses.
+All reproduction sources are under `experiments/jank-wasm`. Downloads, generated files and logs belong in its ignored `.tools`, `.zig-cache`, `zig-out` and `artifacts` directories. Do not commit those directories or generated compiler output containing process-local addresses.
 
 The original environment was macOS arm64, Zig 0.17.1, Node 26.13.1, and an installed jank 0.1-alpha package. The installed binary identifier and exact collector/SDK pins are recorded in the experiment README and `wasm-probe/GC.md`.
 
@@ -184,7 +184,7 @@ Read the complete relevant files before editing:
 
 ## Reproduction commands
 
-Run these from `experiments/zig-wasm` after reading its environment notes:
+Run these from `experiments/jank-wasm` after reading its environment notes:
 
 ```sh
 bash scripts/check-jank.sh

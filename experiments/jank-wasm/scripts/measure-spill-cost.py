@@ -129,7 +129,7 @@ features = ['--enable-memory64', '--enable-exception-handling', '--enable-bulk-m
 optimizer = ROOT / 'artifacts/build-binaryen/bin/wasm-opt'
 patch_digest = hashlib.sha256((ROOT / 'wasm-probe/binaryen-memory64-stack.patch').read_bytes()).hexdigest()
 if (optimizer.parent / 'jank-memory64-patch.sha256').read_text() != patch_digest:
-    sys.exit('Binaryen patch stamp is stale; refresh it with ./jank-zig build first')
+    sys.exit('Binaryen patch stamp is stale; refresh it with ./jank-build build first')
 for variant in ['plain', *(['spill-before'] if compare_startup else []), 'spill']:
     shutil.copyfile(OUT / 'base.wasm', OUT / f'{variant}.wasm')
     if variant == 'spill':

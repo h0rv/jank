@@ -15,8 +15,8 @@ From the repository root on Linux x86_64 with Docker, Python 3, curl, tar, and
 Node 24 on `PATH`:
 
 ```sh
-python3 -B experiments/zig-wasm/examples/bench-cljc/measure.py
-python3 -B experiments/zig-wasm/examples/bench-cljc/measure_test.py
+python3 -B experiments/jank-wasm/examples/bench-cljc/measure.py
+python3 -B experiments/jank-wasm/examples/bench-cljc/measure_test.py
 ```
 
 The driver calls jank-build's prerequisite bootstrap (the documented Ubuntu
@@ -34,7 +34,7 @@ sources, compiler caches, logs and outputs stay under ignored `.tools/` and
 `artifacts/` in the experiment. Zig is not used by this pure Clojure project;
 the experiment's pin remains **0.17.1**.
 
-Outputs: `experiments/zig-wasm/artifacts/bench-cljc/results.json` (metadata,
+Outputs: `experiments/jank-wasm/artifacts/bench-cljc/results.json` (metadata,
 statuses, exact checksums, all ten samples), `results.md` (tables), and
 `*-run.log` / build logs. Redirect driver stdout to an ignored file if desired.
 `--targets cljs-js native wasm64-spill` selects a subset; `--skip-build` reuses
@@ -375,7 +375,7 @@ All 21 target executions exited 0; each invocation printed
 `BENCHMARK VERDICT: PASS`.
 
 ```sh
-python3 -B experiments/zig-wasm/examples/bench-cljc/measure.py --skip-build \
+python3 -B experiments/jank-wasm/examples/bench-cljc/measure.py --skip-build \
   --targets native wasm64-spill wasm64-unsafe wasm32-spill wasm32-unsafe \
   wasm64-mem2-spill wasm64-mem2-unsafe
 ```

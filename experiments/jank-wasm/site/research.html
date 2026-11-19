@@ -23,8 +23,17 @@
       <tr><td>C++ interop works on Wasm</td><td>The game includes <code>raylib.h</code> and <code>raygui.h</code> and calls them through <code>cpp/</code> forms, as on native.</td></tr>
       <tr><td>GC keeps live objects alive</td><td>14 lifetime cases pass natively and on wasm32 and wasm64 with the spill pass. Static-only rooting fails the caller-local cases.</td></tr>
       <tr><td>One command builds native and Wasm</td><td><code>./jank-build setup</code> prepares dependencies; <code>new DIR</code> creates a pure-jank project; <code>build DIR</code> builds both targets. No per-project C++ driver is needed.</td></tr>
-      <tr><td>jank test suite under Wasm</td><td>Under Node with GC on, 133 of 134 doctests and 526 of 533 fixtures that run in Wasm pass. Native control: 141/141 doctests and 861 non-skipped fixtures pass. See the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md#node-test-suite-with-boehm-gc">test results</a>.</td></tr>
+      <tr><td>jank test suite under Wasm</td><td>The wasm64 GC-stress Node runner exits 0: 134/134 doctests and 536 fixtures pass; 7 fixtures are known jank-level gaps. Native control: 141/141 doctests and 861 non-skipped fixtures pass. See the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md#node-test-suite-with-boehm-gc">test results</a>.</td></tr>
       <tr><td>Other targets</td><td>wasm32 (Emscripten, Node) and wasm32-wasip1 (Wasmtime) run the spike for 20 of 20 entries with GC on.</td></tr>
+    </tbody>
+  </table>
+
+  <p>Not run in Wasm: 7 native-only doctests and 327 fixtures. Host-rejected negative fixtures are categorized skips and do not count as Wasm passes.</p>
+  <table>
+    <thead><tr><th>Fixture skip category</th><th>Count</th></tr></thead>
+    <tbody>
+      <tr><td>Host frontend rejects <code>fail-*</code> at compile time</td><td>318</td></tr>
+      <tr><td>Suite skips</td><td>9</td></tr>
     </tbody>
   </table>
 
@@ -108,7 +117,7 @@
   <table>
     <thead><tr><th>Step</th><th>Blocker and work</th></tr></thead>
     <tbody>
-      <tr><td>Investigate remaining test failures</td><td>One doctest and seven fixtures fail after entering the Wasm driver. The exception copy/move doctest retains a released payload; conservative retention and a leak remain possible explanations. See the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md#node-test-suite-with-boehm-gc">suite evidence</a>.</td></tr>
+      <tr><td>Resolve 7 known jank-level gaps</td><td><code>pass-big-integer</code>: AOT stores big-integer constants untagged. <code>fail-with-meta-not-metadatable</code>: AOT calls omit source on runtime errors. <code>pass-private</code>: a <code>def</code> after an in-file <code>ns</code> switch gets the wrong namespace. Four interop fixtures: host-analyzed code uses libstdc++ names absent from the libc++ target. See the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md#node-test-suite-with-boehm-gc">suite evidence</a>.</td></tr>
       <tr><td>Remove the spill cost</td><td>The spill pass cannot tell jank references from integers. The compiler knows which values are references, so it can keep its own root frames or emit typed arithmetic that holds no references, and the spill pass is no longer needed. Collection kernels also need runtime work: chunked ranges, fewer copies in sort and string building.</td></tr>
       <tr><td>Build packaging</td><td><code>jank-build</code> still requires Docker for source builds. The <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/SDK.md">offline SDK</a> for Linux x86_64 (about 580 MiB compressed) builds apps without Docker after extraction. Per-app root drivers are gone; the build supplies roots and entry configuration.</td></tr>
       <tr><td>Reduce core initialization</td><td>Investigate removing unused clojure.core initialization and its retained functions. The <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/size/REPORT.md">size report</a> measures release stripping and size passes; component shares alone do not prove dead code.</td></tr>

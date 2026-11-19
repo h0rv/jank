@@ -598,19 +598,21 @@ def build_wasm(project, stage, modules, launcher, run):
         entry = None
     elif synchronous_raylib:
         entry = target / 'libjank-wasm-raylib-entry.a'
+    elif project.between_frame_gc:
+        entry = target / 'libjank-wasm-between-frame-entry.a'
     if entry is not None:
         source = ROOT / ('scripts/raylib-loop-driver.cpp' if synchronous_raylib else 'sdk/wasm-entry.cpp')
         if not entry.exists() or source.stat().st_mtime > entry.stat().st_mtime:
             obj = entry.with_suffix('.o')
-            run('entry', [*flags, '-O2', '-g', '-c', source, '-o', obj], cwd=cwd)
+            entry_flags = ['-DJANK_WASM_BETWEEN_FRAME_GC'] if project.between_frame_gc else []
+            run('entry', [*flags, *entry_flags, '-O2', '-g', '-c', source, '-o', obj], cwd=cwd)
             run('entry-archive', [pathlib.Path(flags[0]).with_name('emar'), 'rcs', entry, obj])
     if project.frame:
         namespace, function = project.frame.split('/')
         config = stage / 'wasm-config.cpp'
         config.write_text('extern "C" {\n'
                           f'char const *jank_wasm_frame_ns = {json.dumps(namespace)};\n'
-                          f'char const *jank_wasm_frame_var = {json.dumps(function)};\n'
-                          f'int jank_wasm_between_frame_gc = {int(project.between_frame_gc)};\n}}\n')
+                          f'char const *jank_wasm_frame_var = {json.dumps(function)};\n}}\n')
         sources.append((config, []))
     if entry is not None:
         roots = stage / 'wasm-roots.cpp'

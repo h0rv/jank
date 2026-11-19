@@ -45,7 +45,7 @@ const assets = new Map([
   ['/game.wasm', ['application/wasm', wasm]],
 ]);
 const server = http.createServer((request, response) => {
-  const asset = assets.get(request.url);
+  const asset = assets.get(request.url.split('?')[0]);
   if (!asset) return response.writeHead(404).end();
   response.writeHead(200, {'Content-Type': asset[0], 'Cache-Control': 'no-store'}).end(asset[1]);
 });
@@ -161,10 +161,12 @@ try {
   await call('Network.setCacheDisabled', {cacheDisabled: true});
   const startup = [];
   for (let i = 0; i < startups; i++) {
-    await call('Page.navigate', {url});
+    const navigation = `${url}?startup=${i}`;
+    await call('Page.navigate', {url: navigation});
     await evaluate(`new Promise((resolve, reject) => {
       (function check() {
-        if (document.readyState === 'complete' && typeof errors !== 'undefined') {
+        if (location.href === ${JSON.stringify(navigation)} &&
+            document.readyState === 'complete' && typeof errors !== 'undefined') {
           if (errors.length) return reject(new Error(errors.join('\\n')));
           if (firstFrame !== undefined) return resolve(firstFrame);
         }
@@ -214,7 +216,9 @@ try {
   assert.deepEqual(exceptions, []);
   const delta = samples.slice(1).map((sample, i) => sample.time - samples[i].time).sort((a, b) => a - b);
   const percentile = p => delta[Math.ceil(p * delta.length) - 1];
-  const medianStartup = [...startup].sort((a, b) => a - b)[Math.floor(startup.length / 2)];
+  const sortedStartup = [...startup].sort((a, b) => a - b);
+  const medianStartup = (sortedStartup[Math.floor((startup.length - 1) / 2)] +
+                         sortedStartup[Math.floor(startup.length / 2)]) / 2;
   console.log(JSON.stringify({
     jsPath, startupMs: startup, medianStartupMs: medianStartup,
     moduleBytes: wasm.length, gzipBytes: gzipSync(wasm, {level: 9}).length,

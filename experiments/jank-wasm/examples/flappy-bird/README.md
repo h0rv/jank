@@ -85,7 +85,8 @@ supported browser release.
 The default browser build still uses JSPI and the spill pass. The separate
 AI-assisted experiment driver uses the vendored game's state transitions and
 rendering unchanged, but stores the state in a rooted var and returns from
-each frame to Emscripten instead of suspending inside the original loop.
+each frame to the browser instead of suspending inside the original loop.
+Collection is a separate Wasm call from the browser.
 Use the original example above for native play.
 
 ```sh

@@ -371,12 +371,13 @@ class ProjectTests(unittest.TestCase):
                 self.assertEqual(any(label == 'spill' for label, _ in calls), not project.between_frame_gc)
                 entry = next(args for label, args in calls if label == 'entry')
                 self.assertTrue(any(str(arg).endswith('wasm-entry.cpp' if frame else 'raylib-loop-driver.cpp') for arg in entry))
-                self.assertIn(target / ('libjank-wasm-entry.a' if frame else 'libjank-wasm-raylib-entry.a'), link)
+                entry_name = ('libjank-wasm-between-frame-entry.a' if project.between_frame_gc else
+                              'libjank-wasm-entry.a' if frame else 'libjank-wasm-raylib-entry.a')
+                self.assertIn(target / entry_name, link)
+                self.assertEqual('-DJANK_WASM_BETWEEN_FRAME_GC' in entry, project.between_frame_gc)
                 if frame:
                     self.assertIn('"hello.core"', (self.root / 'wasm-config.cpp').read_text())
                     self.assertIn('"frame"', (self.root / 'wasm-config.cpp').read_text())
-                    self.assertIn(f'jank_wasm_between_frame_gc = {int(project.between_frame_gc)}',
-                                  (self.root / 'wasm-config.cpp').read_text())
                 roots = (self.root / 'wasm-roots.cpp').read_text()
                 self.assertIn('GC_add_roots(&__global_base, &__data_end)', roots)
                 cpp = [arg for label, args in calls if label.startswith('cpp') for arg in args]

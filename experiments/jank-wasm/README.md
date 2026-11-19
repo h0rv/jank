@@ -232,8 +232,9 @@ synchronously, set `"wasm": {"gc": "between-frames"}` alongside `frame` to skip
 the spill pass entirely. The default, `"gc": "spill"`, is unchanged.
 In the opt-in build, Emscripten does the normal release optimization at link
 time; the patched Binaryen is not needed. The driver disables collection before
-normal C++ initialization, runs a full collection after the initializer and
-every 30 frames by default, and invokes finalizers with collection disabled.
+normal C++ initialization. The browser enters Wasm separately to collect after
+the initializer returns and after every 30 frames by default. Finalizers run
+with collection disabled.
 Set `Module.jankCollectEvery = 1` before startup to stress the boundary.
 
 The opt-in is a root ownership contract: the app must not suspend, start

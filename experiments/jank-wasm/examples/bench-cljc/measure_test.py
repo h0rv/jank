@@ -122,6 +122,12 @@ class ParserTests(unittest.TestCase):
                 verify_mem2.verify(final, final, source, final, 'spill')
             with self.assertRaisesRegex(ValueError, 'signatures differ'):
                 verify_mem2.verify(dict(final, imports={}), final, source, unsafe, 'spill')
+            extra = {**final['imports'], ('"env"', '"unused"'): [['i32'], ['i32']]}
+            self.assertEqual(verify_mem2.verify(dict(final, imports=extra), final, source, unsafe,
+                                                'spill')['dropped_imports'], [str(('"env"', '"unused"'))])
+            changed = {key: [['i32'], ['i32']] for key in final['imports']}
+            with self.assertRaisesRegex(ValueError, 'signatures differ'):
+                verify_mem2.verify(dict(final, imports=changed), final, source, unsafe, 'spill')
             path.write_text('')
             with self.assertRaisesRegex(ValueError, 'Empty module'):
                 verify_mem2.inspect_wat(path)

@@ -372,6 +372,13 @@ def wasm_compile_flags(database):
 
 
 def build_wasm(project, stage, modules, launcher, run):
+    mode = os.environ.get('JANK_WASM_BUILD_MODE', 'Oz')
+    if mode not in ('baseline', 'strip', 'Os', 'Oz', 'O3'):
+        raise ValueError('JANK_WASM_BUILD_MODE must be baseline, strip, Os, Oz or O3')
+    optimization = os.environ.get('JANK_WASM_APP_OPT', '-O2' if mode == 'baseline' else '-Os')
+    if optimization not in ('-O2', '-Os'):
+        raise ValueError('JANK_WASM_APP_OPT must be -O2 or -Os')
+    lto = ['-flto'] if os.environ.get('JANK_WASM_LTO') == '1' else []
     deps = c_dependencies(project, 'wasm')
     synchronous_raylib = 'raylib' in project.libraries and not project.frame
     target = ROOT / 'artifacts/build-wasm64'
@@ -390,7 +397,8 @@ def build_wasm(project, stage, modules, launcher, run):
     objects = []
     for index, (source, extra) in enumerate(sources):
         obj = stage / f'module-{index}.o'
-        run(f'cpp-{index}', [*flags, '-O2', '-g', *extra, '-c', source, '-o', obj], cwd=cwd)
+        run(f'cpp-{index}', [*flags, optimization, *(['-g'] if mode == 'baseline' else []),
+                            *lto, *extra, '-c', source, '-o', obj], cwd=cwd)
         objects.append(obj)
     if project.zig is not None:
         zig = stage / 'kernel.o'
@@ -401,14 +409,16 @@ def build_wasm(project, stage, modules, launcher, run):
     output = project.out / 'wasm'
     output.mkdir(parents=True, exist_ok=True)
     js = output / f'{project.name}.js'
-    run('link', [flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1',
+    # The spill transform needs __stack_pointer's global name until post-link.
+    run('link', [flags[0], '-O2', *(['-g', '--profiling-funcs'] if mode == 'baseline' else ['-g2']),
+                *lto, '-sMEMORY64=1',
                 '-fwasm-exceptions', '-sALLOW_MEMORY_GROWTH=1',
                 f'-sEXIT_RUNTIME={0 if project.frame else 1}',
                 '-sSTACK_SIZE=4194304',
                 *objects, target / 'libjank-static-runtime.a', *deps.archives, *deps.link_flags,
                 *(['-sJSPI=1', '-Wl,--wrap=EndDrawing'] if synchronous_raylib else []),
                 '-Wl,--error-limit=0', '-o', js])
-    run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm')])
+    run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm'), mode])
     arguments = ['continuous', '20'] if project.wasm_check == 'spike-continuous' else ['static-roots']
     js.write_text("var Module = typeof Module !== 'undefined' ? Module : {};\n"
                   f'Module.arguments ??= {json.dumps(arguments)};\n' + js.read_text())

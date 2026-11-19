@@ -184,6 +184,8 @@ class ProjectTests(unittest.TestCase):
                 self.assertIn('GC_add_roots(&__global_base, &__data_end)', roots)
                 self.assertEqual('-sJSPI=1' in link, not bool(frame))
                 self.assertEqual('-Wl,--wrap=EndDrawing' in link, not bool(frame))
+                self.assertEqual('-Wl,--wrap=emscripten_sleep' in link, not bool(frame))
+                self.assertEqual(any(str(arg).endswith('jspi-suspend-guard.js') for arg in link), not bool(frame))
                 self.assertIn('"interactive": true', page)
                 self.assertIn('"frame": ' + ('"hello.core/frame"' if frame else 'null'), page)
 

@@ -439,7 +439,9 @@ def build_wasm(project, stage, modules, launcher, run):
                 '-sSTACK_SIZE=4194304',
                 *objects, *([entry] if entry is not None else []),
                 target / 'libjank-static-runtime.a', *deps.archives, *deps.link_flags,
-                *(['-sJSPI=1', '-Wl,--wrap=EndDrawing'] if synchronous_raylib else []),
+                *(['-sJSPI=1', '-Wl,--wrap=EndDrawing', '-Wl,--wrap=emscripten_sleep',
+                    '--js-library', ROOT / 'scripts/jspi-suspend-guard.js']
+                  if synchronous_raylib else []),
                 '-Wl,--error-limit=0', '-o', js])
     run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm'), mode])
     arguments = ['continuous', '20'] if project.wasm_check == 'spike-continuous' else ['static-roots']

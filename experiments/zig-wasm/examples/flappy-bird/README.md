@@ -60,12 +60,12 @@ frames (must fire). Chrome 156 headless result:
 
 | Phase | Result |
 | --- | --- |
-| Stress, 20 s | 3933 CDP events, 1164 frames, 1164 suspensions, no guard failure; suspended stack 24304 bytes |
+| Stress, 20 s | 3480 CDP events, 1043 frames, 1043 suspensions, no guard failure; suspended stack 53840 bytes |
 | Write at sp-64 | no failure |
-| Write at sp+12152 | abort: suspended stack frames were overwritten (1 bytes, first at sp+12152) |
+| Write at sp+26920 | abort: suspended stack frames were overwritten (1 bytes, first at sp+26920) |
 
 The nested-suspension branch has no negative control: no page callback can
-reach emscripten_sleep. The guard copies about 24 KB per frame. It does not
+reach emscripten_sleep. The guard copies about 54 KB per frame. It does not
 cover generic frame projects, which use emscripten_set_main_loop without JSPI.
 
 Raylib and raygui are supplied by jank-build's raylib support; their zlib

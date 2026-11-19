@@ -9911,28 +9911,28 @@ MainLoop.init();
 // End JS library exports
 // end include: postlibrary.js
 var ASM_CONSTS = {
-  612750: () => {
+  612766: () => {
     if (document.fullscreenElement) return 1;
   },
-  612796: () => Module.canvas.width,
-  612828: () => parseInt(Module.canvas.style.width),
-  612876: () => {
+  612812: () => Module.canvas.width,
+  612844: () => parseInt(Module.canvas.style.width),
+  612892: () => {
     document.exitFullscreen();
   },
-  612903: () => {
+  612919: () => {
     setTimeout(function() {
       Module.requestFullscreen(false, false);
     }, 100);
   },
-  612975: () => {
+  612991: () => {
     if (document.fullscreenElement) return 1;
   },
-  613021: () => Module.canvas.width,
-  613053: () => screen.width,
-  613078: () => {
+  613037: () => Module.canvas.width,
+  613069: () => screen.width,
+  613094: () => {
     document.exitFullscreen();
   },
-  613105: $0 => {
+  613121: $0 => {
     const canvasId = UTF8ToString($0);
     setTimeout(function() {
       Module.requestFullscreen(false, true);
@@ -9941,54 +9941,54 @@ var ASM_CONSTS = {
       }, 100);
     }, 100);
   },
-  613299: () => window.innerWidth,
-  613325: () => window.innerHeight,
-  613352: () => {
+  613315: () => window.innerWidth,
+  613341: () => window.innerHeight,
+  613368: () => {
     if (document.fullscreenElement) return 1;
   },
-  613398: () => Module.canvas.width,
-  613430: () => parseInt(Module.canvas.style.width),
-  613478: () => {
+  613414: () => Module.canvas.width,
+  613446: () => parseInt(Module.canvas.style.width),
+  613494: () => {
     if (document.fullscreenElement) return 1;
   },
-  613524: () => Module.canvas.width,
-  613556: () => screen.width,
-  613581: () => window.innerWidth,
-  613607: () => window.innerHeight,
-  613634: () => {
+  613540: () => Module.canvas.width,
+  613572: () => screen.width,
+  613597: () => window.innerWidth,
+  613623: () => window.innerHeight,
+  613650: () => {
     if (document.fullscreenElement) return 1;
   },
-  613680: () => Module.canvas.width,
-  613712: () => screen.width,
-  613737: () => {
+  613696: () => Module.canvas.width,
+  613728: () => screen.width,
+  613753: () => {
     document.exitFullscreen();
   },
-  613764: () => {
+  613780: () => {
     if (document.fullscreenElement) return 1;
   },
-  613810: () => Module.canvas.width,
-  613842: () => parseInt(Module.canvas.style.width),
-  613890: () => {
+  613826: () => Module.canvas.width,
+  613858: () => parseInt(Module.canvas.style.width),
+  613906: () => {
     document.exitFullscreen();
   },
-  613917: $0 => {
+  613933: $0 => {
     Module.canvas.style.opacity = $0;
   },
-  613955: () => screen.width,
-  613980: () => screen.height,
-  614006: () => window.screenX,
-  614033: () => window.screenY,
-  614060: () => window.devicePixelRatio,
-  614096: $0 => {
+  613971: () => screen.width,
+  613996: () => screen.height,
+  614022: () => window.screenX,
+  614049: () => window.screenY,
+  614076: () => window.devicePixelRatio,
+  614112: $0 => {
     navigator.clipboard.writeText(UTF8ToString($0));
   },
-  614149: $0 => {
+  614165: $0 => {
     Module.canvas.style.cursor = UTF8ToString($0);
   },
-  614200: () => {
+  614216: () => {
     Module.canvas.style.cursor = "none";
   },
-  614237: ($0, $1, $2, $3) => {
+  614253: ($0, $1, $2, $3) => {
     try {
       navigator.getGamepads()[$0].vibrationActuator.playEffect("dual-rumble", {
         startDelay: 0,
@@ -10002,18 +10002,18 @@ var ASM_CONSTS = {
       } catch (e) {}
     }
   },
-  614493: $0 => {
+  614509: $0 => {
     Module.canvas.style.cursor = UTF8ToString($0);
   },
-  614544: () => {
+  614560: () => {
     if (document.pointerLockElement) return 1;
   },
-  614591: () => {
+  614607: () => {
     if (document.fullscreenElement) return 1;
   },
-  614637: () => window.innerWidth,
-  614663: () => window.innerHeight,
-  614690: ($0, $1, $2, $3) => {
+  614653: () => window.innerWidth,
+  614679: () => window.innerHeight,
+  614706: ($0, $1, $2, $3) => {
     Module.jankFrameStats = ({
       frames: Number($0),
       collections: Number($1),
@@ -10026,7 +10026,7 @@ var ASM_CONSTS = {
     });
     Module.onJankFrame?.(Module.jankFrameStats);
   },
-  615008: $0 => {
+  615024: $0 => {
     Module.jankStackBase = Number($0);
   }
 };

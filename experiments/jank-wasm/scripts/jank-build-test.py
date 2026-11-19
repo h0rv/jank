@@ -182,6 +182,9 @@ class ProjectTests(unittest.TestCase):
                     self.assertIn('"frame"', (self.root / 'wasm-config.cpp').read_text())
                 roots = (self.root / 'wasm-roots.cpp').read_text()
                 self.assertIn('GC_add_roots(&__global_base, &__data_end)', roots)
+                cpp = [arg for label, args in calls if label.startswith('cpp') for arg in args]
+                self.assertIn(self.root / 'scripts/exception-roots.cpp', cpp)
+                self.assertIn('-Wl,--wrap=__cxa_allocate_exception,--wrap=__cxa_free_exception', link)
                 self.assertEqual('-sJSPI=1' in link, not bool(frame))
                 self.assertEqual('-Wl,--wrap=EndDrawing' in link, not bool(frame))
                 self.assertEqual('-Wl,--wrap=emscripten_sleep' in link, not bool(frame))

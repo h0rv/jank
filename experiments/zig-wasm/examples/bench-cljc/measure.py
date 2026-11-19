@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""AI-assisted shared ClojureScript/native/wasm64 benchmark. Run on the host."""
+"""AI-assisted shared ClojureScript/native/wasm benchmark. Run on the host."""
 import argparse
 import hashlib
 import importlib.util
@@ -28,6 +28,24 @@ jb = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = jb
 SPEC.loader.exec_module(jb)
 jb.LOGS = OUT
+
+
+def wasm_file(bits, variant, suffix):
+    prefix = 'wasm32-' if bits == '32' else ''
+    return OUT / f'{prefix}{variant}.{suffix}'
+
+
+def prerequisites_wasm32():
+    archive = ROOT / 'artifacts/build-wasm32/libjank-static-runtime.a'
+    if archive.is_file():
+        return
+    start = time.perf_counter()
+    for step in ('deps', 'configure', 'build'):
+        run(f'wasm32-runtime-{step}', jb.docker('env', 'WASM_BITS=32', 'bash',
+            ROOT / 'scripts/build-wasm64-target.sh', step))
+    elapsed = time.perf_counter() - start
+    (OUT / 'wasm32-runtime-build.json').write_text(json.dumps(dict(wall_seconds=elapsed)) + '\n')
+    print(f'wasm32 runtime deps/configure/build wall-seconds={elapsed:.3f}', flush=True)
 
 
 def parse(output, code, gc_disabled=None, require_startup=False):
@@ -134,7 +152,8 @@ def build_jank(platform, state):
         launcher.write_text(text + '\n' + (PROJECT / 'timing.cpp').read_text())
         jb.build_native(project, stage, stage / 'zig-out', modules, launcher, command)
         return
-    target = ROOT / 'artifacts/build-wasm64'
+    bits = platform.removeprefix('wasm')
+    target = ROOT / f'artifacts/build-wasm{bits}'
     flags, cwd = jb.wasm_compile_flags(json.loads((target / 'compile_commands.json').read_text()))
     objects = []
     for i, source in enumerate([launcher, *modules, PROJECT / 'timing.cpp']):
@@ -143,16 +162,20 @@ def build_jank(platform, state):
         objects.append(obj)
     pre = OUT / 'pre.js'
     pre.write_text('Module.preRun = [function() {console.log("STARTUP ms=" + process.uptime()*1000);}];\n')
-    command('link', [flags[0], '-O2', '-g', '--profiling-funcs', '-sMEMORY64=1',
+    command('link', [flags[0], '-O2', '-g', '--profiling-funcs', *(['-sMEMORY64=1'] if bits == '64' else []),
         '-fwasm-exceptions', '-sALLOW_MEMORY_GROWTH=1', '-sEXIT_RUNTIME=1', '-sSTACK_SIZE=4194304',
         '--pre-js', pre, *objects, target / 'libjank-static-runtime.a',
-        '-Wl,--error-limit=0', '-o', OUT / 'unsafe.js'])
+        '-Wl,--error-limit=0', '-o', wasm_file(bits, 'unsafe', 'js')])
 
 
-def spill():
-    shutil.copyfile(OUT / 'unsafe.wasm', OUT / 'spill.wasm')
-    (OUT / 'spill.js').write_text((OUT / 'unsafe.js').read_text().replace('unsafe.wasm', 'spill.wasm'))
-    run('wasm-spill', jb.docker('python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, OUT / 'spill.wasm'))
+def spill(bits='64'):
+    source = wasm_file(bits, 'unsafe', 'wasm')
+    output = wasm_file(bits, 'spill', 'wasm')
+    shutil.copyfile(source, output)
+    wasm_file(bits, 'spill', 'js').write_text(wasm_file(bits, 'unsafe', 'js').read_text().replace(source.name, output.name))
+    optimizer = (['env', f'SPILL_WASM_OPT={ROOT / ".tools/gc-wasm/emsdk/upstream/bin/wasm-opt"}']
+                 if bits == '32' else [])
+    run(f'wasm{bits}-spill', jb.docker(*optimizer, 'python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, output))
 
 
 def execute(target, node):
@@ -165,8 +188,9 @@ def execute(target, node):
         result = subprocess.run(jb.docker('python3', '-c', script), check=True,
                                 capture_output=True, text=True, timeout=600)
         return json.loads(result.stdout)
-    file = {'cljs-js': 'cljs-run.cjs', 'wasm64-spill': 'spill.js', 'wasm64-unsafe': 'unsafe.js'}[target]
-    args = [node, OUT / file, *(['unsafe-no-gc'] if target == 'wasm64-unsafe' else [])]
+    file = (OUT / 'cljs-run.cjs' if target == 'cljs-js' else
+            wasm_file(target.split('-')[0].removeprefix('wasm'), target.split('-')[1], 'js'))
+    args = [node, file, *(['unsafe-no-gc'] if target.endswith('-unsafe') else [])]
     start = time.perf_counter()
     result = subprocess.run(list(map(str, args)), capture_output=True, text=True, timeout=600)
     return dict(code=result.returncode, output=result.stdout+result.stderr,
@@ -193,6 +217,10 @@ def markdown(data):
     for target, row in data['targets'].items():
         for name, kernel in row.get('kernels', {}).items():
             lines.append(f'| {name} | {target} | {kernel["checksum"]} | {kernel["first_ms"]:.3f} | {kernel["median_ms"]:.3f} |')
+    lines += ['', '| Wasm target | Module bytes |', '| --- | ---: |']
+    for target, row in data['targets'].items():
+        if 'module_bytes' in row:
+            lines.append(f'| {target} | {row["module_bytes"]} |')
     lines += ['', '| Kernel | spill / cljs-js (warm) | spill / native (warm) |',
               '| --- | ---: | ---: |']
     targets = data['targets']
@@ -208,7 +236,7 @@ def markdown(data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--targets', nargs='+', choices=['cljs-js', 'native', 'wasm64-spill', 'wasm64-unsafe'],
+    parser.add_argument('--targets', nargs='+', choices=['cljs-js', 'native', 'wasm64-spill', 'wasm64-unsafe', 'wasm32-spill', 'wasm32-unsafe'],
                         default=['cljs-js', 'native', 'wasm64-spill', 'wasm64-unsafe'])
     parser.add_argument('--skip-build', action='store_true')
     args = parser.parse_args()
@@ -230,6 +258,8 @@ def main():
     if not args.skip_build and any(t != 'cljs-js' for t in args.targets):
         try:
             jb.prerequisites(jb.load_project(PROJECT))
+            if any(t.startswith('wasm32-') for t in args.targets):
+                prerequisites_wasm32()
         except Exception as error:
             prerequisite_error = str(error)
         data['metadata']['emsdk'] = sdk.read_text().strip() if sdk.exists() else 'not installed'
@@ -239,7 +269,7 @@ def main():
     for target in args.targets:
         row = dict(compile='NOT RUN', link='NOT RUN', execute='NOT RUN', correctness='NOT CHECKED')
         data['targets'][target] = row
-        group = 'wasm' if target.startswith('wasm64') else target
+        group = target.split('-')[0] if target.startswith('wasm') else target
         state = dict(phase='compile')
         try:
             if group != 'cljs-js' and prerequisite_error:
@@ -256,9 +286,11 @@ def main():
                     raise
                 built.add(group)
             row.update(compile='PASS', link='PASS' if group != 'cljs-js' else 'N/A (Closure advanced)')
-            if target == 'wasm64-spill' and not args.skip_build:
+            if target.endswith('-spill') and not args.skip_build:
                 state['phase'] = 'transform'
-                spill()
+                spill(group.removeprefix('wasm'))
+            if target.startswith('wasm'):
+                row['module_bytes'] = wasm_file(group.removeprefix('wasm'), target.split('-')[1], 'wasm').stat().st_size
             state['phase'] = 'execute'
             sample = execute(target, node)
             (OUT / f'{target}-run.log').write_text(sample['output'])
@@ -266,8 +298,8 @@ def main():
             row['execute'] = f'exit {sample["code"]}'
             state['phase'] = 'correctness'
             row.update(parse(sample['output'], sample['code'],
-                None if target == 'cljs-js' else target == 'wasm64-unsafe',
-                require_startup=target.startswith('wasm64')))
+                None if target == 'cljs-js' else target.endswith('-unsafe'),
+                require_startup=target.startswith('wasm')))
             row['correctness'] = 'PASS'
         except Exception as error:
             if 'compile' in state:

@@ -3191,6 +3191,7 @@ python3 -B experiments/zig-wasm/examples/bench-cljc/measure.py
 
 The driver bootstraps through jank-build and writes JSON (including ten samples
 per kernel), Markdown tables and logs under ignored `artifacts/bench-cljc/`.
+The report's [three-run wasm32/MEMORY64=2 comparison](examples/bench-cljc/REPORT.md#wasm32-and-memory642-three-run-comparison) includes timing spreads, layout-matched ratios and Linux WebKit/Chrome execution results.
 After the runtime fixes in the report's Optimisations section, all four
 targets pass every checksum (`BENCHMARK VERDICT: PASS`), including the
 explicitly unsafe no-spill variant with GC disabled; its baseline out-of-memory

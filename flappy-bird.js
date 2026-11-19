@@ -3372,6 +3372,112 @@ function ___syscall_stat64(path, buf) {
   }
 }
 
+var stackSave = () => _emscripten_stack_get_current();
+
+var runtimeKeepaliveCounter = 0;
+
+var runtimeKeepalivePop = () => {
+  runtimeKeepaliveCounter -= 1;
+};
+
+var runtimeKeepalivePush = () => {
+  runtimeKeepaliveCounter += 1;
+};
+
+var Asyncify = {
+  instrumentWasmImports(imports) {
+    var importPattern = /^(invoke_.*|__asyncjs__.*)$/;
+    for (let [x, original] of Object.entries(imports)) {
+      if (typeof original === "function") {
+        let isAsyncifyImport = original.isAsync || importPattern.test(x);
+        // Wrap async imports with a suspending WebAssembly function.
+        if (isAsyncifyImport) {
+          imports[x] = original = new WebAssembly.Suspending(original);
+        }
+      }
+    }
+  },
+  instrumentWasmExports(exports) {
+    var exportPattern = /^(main|__main_argc_argv)$/;
+    Asyncify.asyncExports = new Set;
+    var ret = {};
+    for (let [x, original] of Object.entries(exports)) {
+      if (typeof original === "function") {
+        // Wrap all exports with a promising WebAssembly function.
+        let isAsyncifyExport = exportPattern.test(x);
+        if (isAsyncifyExport) {
+          Asyncify.asyncExports.add(original);
+          original = Asyncify.makeAsyncFunction(original);
+        }
+        ret[x] = original;
+      } else {
+        ret[x] = original;
+      }
+    }
+    return ret;
+  },
+  asyncExports: null,
+  isAsyncExport(func) {
+    return Asyncify.asyncExports?.has(func);
+  },
+  handleAsync: async startAsync => {
+    runtimeKeepalivePush();
+    try {
+      return await startAsync();
+    } finally {
+      runtimeKeepalivePop();
+    }
+  },
+  handleSleep: startAsync => Asyncify.handleAsync(() => new Promise(startAsync)),
+  makeAsyncFunction(original) {
+    return WebAssembly.promising(original);
+  }
+};
+
+var _emscripten_sleep = function(ms) {
+  let innerFunc = () => new Promise(resolve => setTimeout(resolve, ms));
+  return Asyncify.handleAsync(innerFunc);
+};
+
+_emscripten_sleep.isAsync = true;
+
+var ___wrap_emscripten_sleep = async ms => {
+  const guard = Module.jankSuspend ??= {
+    active: false,
+    count: 0,
+    maxBytes: 0
+  };
+  const fail = what => abort(`JSPI SUSPEND GUARD: ${what} (suspension ${guard.count}, ` + `sp=${guard.sp}, base=${guard.base})`);
+  if (guard.active) fail("nested suspension would share the suspended C stack");
+  const sp = Number(stackSave()), base = Module.jankStackBase;
+  const saved = HEAPU8.slice(sp, base);
+  Object.assign(guard, {
+    active: true,
+    sp,
+    base,
+    count: guard.count + 1,
+    maxBytes: Math.max(guard.maxBytes, base - sp)
+  });
+  try {
+    await _emscripten_sleep(ms);
+  } finally {
+    guard.active = false;
+  }
+  const resumed = Number(stackSave());
+  if (resumed !== sp) fail(`stack pointer changed across suspension to ${resumed}`);
+  const current = HEAPU8.subarray(sp, base);
+  let first = -1, changed = 0;
+  for (let i = 0; i < saved.length; i++) {
+    if (saved[i] !== current[i]) {
+      changed++;
+      if (first < 0) first = i;
+    }
+  }
+  if (changed) fail(`suspended stack frames were overwritten (${changed} bytes, first at sp+${first})`);
+};
+
+___wrap_emscripten_sleep.isAsync = true;
+
 var __abort_js = () => abort("");
 
 var __tzset_js = function(timezone, daylight, std_name, dst_name) {
@@ -6469,66 +6575,6 @@ function _emscripten_resize_heap(requestedSize) {
   return -1;
 };
 
-var runtimeKeepaliveCounter = 0;
-
-var runtimeKeepalivePop = () => {
-  runtimeKeepaliveCounter -= 1;
-};
-
-var runtimeKeepalivePush = () => {
-  runtimeKeepaliveCounter += 1;
-};
-
-var Asyncify = {
-  instrumentWasmImports(imports) {
-    var importPattern = /^(invoke_.*|__asyncjs__.*)$/;
-    for (let [x, original] of Object.entries(imports)) {
-      if (typeof original === "function") {
-        let isAsyncifyImport = original.isAsync || importPattern.test(x);
-        // Wrap async imports with a suspending WebAssembly function.
-        if (isAsyncifyImport) {
-          imports[x] = original = new WebAssembly.Suspending(original);
-        }
-      }
-    }
-  },
-  instrumentWasmExports(exports) {
-    var exportPattern = /^(main|__main_argc_argv)$/;
-    Asyncify.asyncExports = new Set;
-    var ret = {};
-    for (let [x, original] of Object.entries(exports)) {
-      if (typeof original === "function") {
-        // Wrap all exports with a promising WebAssembly function.
-        let isAsyncifyExport = exportPattern.test(x);
-        if (isAsyncifyExport) {
-          Asyncify.asyncExports.add(original);
-          original = Asyncify.makeAsyncFunction(original);
-        }
-        ret[x] = original;
-      } else {
-        ret[x] = original;
-      }
-    }
-    return ret;
-  },
-  asyncExports: null,
-  isAsyncExport(func) {
-    return Asyncify.asyncExports?.has(func);
-  },
-  handleAsync: async startAsync => {
-    runtimeKeepalivePush();
-    try {
-      return await startAsync();
-    } finally {
-      runtimeKeepalivePop();
-    }
-  },
-  handleSleep: startAsync => Asyncify.handleAsync(() => new Promise(startAsync)),
-  makeAsyncFunction(original) {
-    return WebAssembly.promising(original);
-  }
-};
-
 var wasmTableMirror = [];
 
 var getWasmTableEntry = funcPtr => {
@@ -6987,13 +7033,6 @@ function _emscripten_set_window_title(title) {
   title = bigintToI53Checked(title);
   return document.title = UTF8ToString(title);
 }
-
-var _emscripten_sleep = function(ms) {
-  let innerFunc = () => new Promise(resolve => setTimeout(resolve, ms));
-  return Asyncify.handleAsync(innerFunc);
-};
-
-_emscripten_sleep.isAsync = true;
 
 var ENV = {};
 
@@ -9872,39 +9911,28 @@ MainLoop.init();
 // End JS library exports
 // end include: postlibrary.js
 var ASM_CONSTS = {
-  611200: ($0, $1, $2, $3) => {
-    Module.jankFrameStats = ({
-      frames: Number($0),
-      collections: Number($1),
-      heap: Number($2),
-      used: Number($3),
-      memory: HEAPU8.buffer.byteLength,
-      time: performance.now()
-    });
-    Module.onJankFrame?.(Module.jankFrameStats);
-  },
-  611417: () => {
+  612750: () => {
     if (document.fullscreenElement) return 1;
   },
-  611463: () => Module.canvas.width,
-  611495: () => parseInt(Module.canvas.style.width),
-  611543: () => {
+  612796: () => Module.canvas.width,
+  612828: () => parseInt(Module.canvas.style.width),
+  612876: () => {
     document.exitFullscreen();
   },
-  611570: () => {
+  612903: () => {
     setTimeout(function() {
       Module.requestFullscreen(false, false);
     }, 100);
   },
-  611642: () => {
+  612975: () => {
     if (document.fullscreenElement) return 1;
   },
-  611688: () => Module.canvas.width,
-  611720: () => screen.width,
-  611745: () => {
+  613021: () => Module.canvas.width,
+  613053: () => screen.width,
+  613078: () => {
     document.exitFullscreen();
   },
-  611772: $0 => {
+  613105: $0 => {
     const canvasId = UTF8ToString($0);
     setTimeout(function() {
       Module.requestFullscreen(false, true);
@@ -9913,54 +9941,54 @@ var ASM_CONSTS = {
       }, 100);
     }, 100);
   },
-  611966: () => window.innerWidth,
-  611992: () => window.innerHeight,
-  612019: () => {
+  613299: () => window.innerWidth,
+  613325: () => window.innerHeight,
+  613352: () => {
     if (document.fullscreenElement) return 1;
   },
-  612065: () => Module.canvas.width,
-  612097: () => parseInt(Module.canvas.style.width),
-  612145: () => {
+  613398: () => Module.canvas.width,
+  613430: () => parseInt(Module.canvas.style.width),
+  613478: () => {
     if (document.fullscreenElement) return 1;
   },
-  612191: () => Module.canvas.width,
-  612223: () => screen.width,
-  612248: () => window.innerWidth,
-  612274: () => window.innerHeight,
-  612301: () => {
+  613524: () => Module.canvas.width,
+  613556: () => screen.width,
+  613581: () => window.innerWidth,
+  613607: () => window.innerHeight,
+  613634: () => {
     if (document.fullscreenElement) return 1;
   },
-  612347: () => Module.canvas.width,
-  612379: () => screen.width,
-  612404: () => {
+  613680: () => Module.canvas.width,
+  613712: () => screen.width,
+  613737: () => {
     document.exitFullscreen();
   },
-  612431: () => {
+  613764: () => {
     if (document.fullscreenElement) return 1;
   },
-  612477: () => Module.canvas.width,
-  612509: () => parseInt(Module.canvas.style.width),
-  612557: () => {
+  613810: () => Module.canvas.width,
+  613842: () => parseInt(Module.canvas.style.width),
+  613890: () => {
     document.exitFullscreen();
   },
-  612584: $0 => {
+  613917: $0 => {
     Module.canvas.style.opacity = $0;
   },
-  612622: () => screen.width,
-  612647: () => screen.height,
-  612673: () => window.screenX,
-  612700: () => window.screenY,
-  612727: () => window.devicePixelRatio,
-  612763: $0 => {
+  613955: () => screen.width,
+  613980: () => screen.height,
+  614006: () => window.screenX,
+  614033: () => window.screenY,
+  614060: () => window.devicePixelRatio,
+  614096: $0 => {
     navigator.clipboard.writeText(UTF8ToString($0));
   },
-  612816: $0 => {
+  614149: $0 => {
     Module.canvas.style.cursor = UTF8ToString($0);
   },
-  612867: () => {
+  614200: () => {
     Module.canvas.style.cursor = "none";
   },
-  612904: ($0, $1, $2, $3) => {
+  614237: ($0, $1, $2, $3) => {
     try {
       navigator.getGamepads()[$0].vibrationActuator.playEffect("dual-rumble", {
         startDelay: 0,
@@ -9974,17 +10002,33 @@ var ASM_CONSTS = {
       } catch (e) {}
     }
   },
-  613160: $0 => {
+  614493: $0 => {
     Module.canvas.style.cursor = UTF8ToString($0);
   },
-  613211: () => {
+  614544: () => {
     if (document.pointerLockElement) return 1;
   },
-  613258: () => {
+  614591: () => {
     if (document.fullscreenElement) return 1;
   },
-  613304: () => window.innerWidth,
-  613330: () => window.innerHeight
+  614637: () => window.innerWidth,
+  614663: () => window.innerHeight,
+  614690: ($0, $1, $2, $3) => {
+    Module.jankFrameStats = ({
+      frames: Number($0),
+      collections: Number($1),
+      heap: Number($2),
+      used: Number($3),
+      memory: HEAPU8.buffer.byteLength,
+      time: performance.now(),
+      suspensions: Module.jankSuspend?.count ?? 0,
+      suspendedStackBytes: Module.jankSuspend?.maxBytes ?? 0
+    });
+    Module.onJankFrame?.(Module.jankFrameStats);
+  },
+  615008: $0 => {
+    Module.jankStackBase = Number($0);
+  }
 };
 
 function SetCanvasIdJs(out, outSize) {
@@ -9995,7 +10039,7 @@ function SetCanvasIdJs(out, outSize) {
 SetCanvasIdJs.sig = "vji";
 
 // Imports from the Wasm binary.
-var __ZN5folly15SharedMutexImplILb0EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj, __ZN5folly15SharedMutexImplILb1EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj, _main, _free, _fflush, _malloc, ___funcs_on_exit, _emscripten_builtin_memalign, ___trap, __emscripten_stack_alloc, memory, __indirect_function_table, wasmMemory, wasmTable;
+var __ZN5folly15SharedMutexImplILb0EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj, __ZN5folly15SharedMutexImplILb1EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj, _main, _free, _fflush, _malloc, ___funcs_on_exit, _emscripten_builtin_memalign, ___trap, __emscripten_stack_alloc, _emscripten_stack_get_current, memory, __indirect_function_table, wasmMemory, wasmTable;
 
 function assignWasmExports(wasmExports) {
   __ZN5folly15SharedMutexImplILb0EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj = Module["__ZN5folly15SharedMutexImplILb0EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj"] = wasmExports["_ZN5folly15SharedMutexImplILb0EvNSt3__26atomicENS_24SharedMutexPolicyDefaultEE25wakeRegisteredWaitersImplERjj"];
@@ -10008,6 +10052,7 @@ function assignWasmExports(wasmExports) {
   _emscripten_builtin_memalign = wasmExports["emscripten_builtin_memalign"];
   ___trap = wasmExports["__trap"];
   __emscripten_stack_alloc = wasmExports["_emscripten_stack_alloc"];
+  _emscripten_stack_get_current = wasmExports["emscripten_stack_get_current"];
   memory = wasmMemory = wasmExports["memory"];
   __indirect_function_table = wasmTable = wasmExports["__indirect_function_table"];
 }
@@ -10024,6 +10069,7 @@ var wasmImports = {
   /** @export */ __syscall_newfstatat: ___syscall_newfstatat,
   /** @export */ __syscall_openat: ___syscall_openat,
   /** @export */ __syscall_stat64: ___syscall_stat64,
+  /** @export */ __wrap_emscripten_sleep: ___wrap_emscripten_sleep,
   /** @export */ _abort_js: __abort_js,
   /** @export */ _tzset_js: __tzset_js,
   /** @export */ clock_time_get: _clock_time_get,
@@ -10327,7 +10373,6 @@ var wasmImports = {
   /** @export */ emscripten_set_touchstart_callback_on_thread: _emscripten_set_touchstart_callback_on_thread,
   /** @export */ emscripten_set_visibilitychange_callback_on_thread: _emscripten_set_visibilitychange_callback_on_thread,
   /** @export */ emscripten_set_window_title: _emscripten_set_window_title,
-  /** @export */ emscripten_sleep: _emscripten_sleep,
   /** @export */ environ_get: _environ_get,
   /** @export */ environ_sizes_get: _environ_sizes_get,
   /** @export */ exit: _exit,
@@ -10426,6 +10471,7 @@ function applySignatureConversions(wasmExports) {
   var makeWrapper__p = f => a0 => f(BigInt(a0));
   var makeWrapper_pp = f => a0 => Number(f(BigInt(a0)));
   var makeWrapper_ppp = f => (a0, a1) => Number(f(BigInt(a0), BigInt(a1)));
+  var makeWrapper_p = f => () => Number(f());
   var origExports = wasmExports;
   wasmExports = {};
   wasmExports["__main_argc_argv"] = makeWrapper___PP(origExports["__main_argc_argv"]);
@@ -10434,6 +10480,7 @@ function applySignatureConversions(wasmExports) {
   wasmExports["malloc"] = makeWrapper_pp(origExports["malloc"]);
   wasmExports["emscripten_builtin_memalign"] = makeWrapper_ppp(origExports["emscripten_builtin_memalign"]);
   wasmExports["_emscripten_stack_alloc"] = makeWrapper_pp(origExports["_emscripten_stack_alloc"]);
+  wasmExports["emscripten_stack_get_current"] = makeWrapper_p(origExports["emscripten_stack_get_current"]);
   Object.setPrototypeOf(wasmExports, origExports);
   return wasmExports;
 }

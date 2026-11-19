@@ -4001,11 +4001,11 @@ MainLoop.init();
 // End JS library exports
 // end include: postlibrary.js
 var ASM_CONSTS = {
-  574396: () => {
+  574348: () => {
     const n = Module.jankCollectEvery ?? 1;
     return Number.isInteger(n) && n >= 1 && n <= 60 ? n : 1;
   },
-  574497: ($0, $1, $2, $3, $4) => {
+  574449: ($0, $1, $2, $3, $4) => {
     Module.jankFrameStats = ({
       frames: Number($0),
       collections: Number($1),

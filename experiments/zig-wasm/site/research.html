@@ -67,7 +67,7 @@
 
   <h2>Performance</h2>
   <p>Warm medians in milliseconds over 10 samples, from one <code>.cljc</code> file (<a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/zig-wasm/examples/bench-cljc/REPORT.md">report</a>). <i>wasm64 unsafe</i> turns GC off and skips the spill pass; it is a measurement control, not a usable build.</p>
-  <table>
+  <div class="scroll"><table>
     <thead><tr><th>Kernel</th><th>ClojureScript</th><th>jank native</th><th>wasm64</th><th>wasm64 unsafe</th></tr></thead>
     <tbody>
       <tr><td><code>fib27</code></td><td>7.07</td><td>1.19</td><td>78.66</td><td>3.12</td></tr>
@@ -77,7 +77,7 @@
       <tr><td><code>strings1k</code></td><td>0.08</td><td>0.28</td><td>1.74</td><td>1.04</td></tr>
       <tr><td><code>sort5k</code></td><td>1.13</td><td>1.67</td><td>9.44</td><td>5.76</td></tr>
     </tbody>
-  </table>
+  </table></div>
   <ul>
     <li>wasm64 is slower than ClojureScript on every kernel. Native jank is faster only on <code>fib27</code>.</li>
     <li>On <code>fib27</code>, which allocates nothing, 96% of the wasm64 time is the flatten and spill pipeline (3.2 ms without it, 76.7 ms with it).</li>

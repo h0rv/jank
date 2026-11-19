@@ -101,6 +101,14 @@ class ProjectTests(unittest.TestCase):
         self.assertEqual(project.include_dirs, ())
         self.assertIsNone(project.frame)
 
+    def test_sdk_optional_expectations(self):
+        del self.config['expect']
+        (self.root / 'jank-build.json').write_text(driver.json.dumps(self.config))
+        project = driver.load_project(self.root, require_expect=False)
+        self.assertEqual(project.expected('browser'), ())
+        with self.assertRaises(RuntimeError):
+            driver.load_project(self.root)
+
     def test_c_library_options(self):
         self.config.update(libraries=['raylib'], include_dirs=['src'],
                            native={'link_flags': ['-lm']}, wasm={'link_flags': ['-sASSERTIONS=1']},
@@ -165,8 +173,14 @@ class ProjectTests(unittest.TestCase):
                 self.assertIn(f'-sEXIT_RUNTIME={0 if frame else 1}', link)
                 self.assertIn('-sUSE_GLFW=3', link)
                 self.assertIn('-sASSERTIONS=1', link)
-                cpp = [args for label, args in calls if label.startswith('cpp')][-1]
-                self.assertTrue(any(str(arg).endswith('frame-driver.cpp' if frame else 'raylib-loop-driver.cpp') for arg in cpp))
+                entry = next(args for label, args in calls if label == 'entry')
+                self.assertTrue(any(str(arg).endswith('wasm-entry.cpp' if frame else 'raylib-loop-driver.cpp') for arg in entry))
+                self.assertIn(target / ('libjank-wasm-entry.a' if frame else 'libjank-wasm-raylib-entry.a'), link)
+                if frame:
+                    self.assertIn('"hello.core"', (self.root / 'wasm-config.cpp').read_text())
+                    self.assertIn('"frame"', (self.root / 'wasm-config.cpp').read_text())
+                roots = (self.root / 'wasm-roots.cpp').read_text()
+                self.assertIn('GC_add_roots(&__global_base, &__data_end)', roots)
                 self.assertEqual('-sJSPI=1' in link, not bool(frame))
                 self.assertEqual('-Wl,--wrap=EndDrawing' in link, not bool(frame))
                 self.assertIn('"interactive": true', page)

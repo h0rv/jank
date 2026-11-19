@@ -146,6 +146,9 @@ prints a verdict table. Logs and browser DOM evidence are in
 
 ### C libraries and interactive browser frames
 
+The [offline wasm64 SDK](SDK.md) packages the compiler and toolchain for
+Docker-free, offline project builds after extraction.
+
 Small optional `jank-build.json` additions:
 
 ```json

@@ -22,7 +22,7 @@ struct collection_listener : doctest::IReporter
   void test_run_start() override {}
   void test_run_end(doctest::TestRunStats const &stats) override
   {
-    std::printf("JANK_WASM_DOCTEST %u %u %u %zu\n",
+    std::printf("\nJANK_WASM_DOCTEST %u %u %u %zu\n",
                 stats.numTestCases,
                 stats.numTestCasesPassingFilters,
                 stats.numTestCasesFailed,
@@ -33,7 +33,7 @@ struct collection_listener : doctest::IReporter
   {
     if(!stats.testCaseSuccess)
     {
-      std::printf("JANK_WASM_DOCTEST_FAILURE %d %s:%u %s\n",
+      std::printf("\nJANK_WASM_DOCTEST_FAILURE %d %s:%u %s\n",
                   stats.failure_flags,
                   current->m_file.c_str(),
                   current->m_line,

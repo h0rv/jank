@@ -108,7 +108,7 @@ int main(int const argc, char **argv)
     wasm_test::collect_periodically(index++);
     auto const forced{ GC_get_gc_no() - before };
     auto const result{ run(test) };
-    std::printf("JANK_WASM_RESULT %s %s %zu %zu %d\n",
+    std::printf("\nJANK_WASM_RESULT %s %s %zu %zu %d\n",
                 test.id,
                 result,
                 static_cast<size_t>(GC_get_gc_no() - before),

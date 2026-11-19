@@ -17,6 +17,145 @@ SPEC.loader.exec_module(driver)
 
 
 class DriverTests(unittest.TestCase):
+    def test_preflight(self):
+        with mock.patch.object(driver.sys, 'version_info', (3, 9)):
+            with self.assertRaisesRegex(RuntimeError, 'Python 3.10'):
+                driver.preflight()
+        for tool in ('docker', 'git', 'curl'):
+            with self.subTest(tool=tool), mock.patch.object(driver.shutil, 'which',
+                    side_effect=lambda name: None if name == tool else '/bin/' + name):
+                with self.assertRaisesRegex(RuntimeError, tool):
+                    driver.preflight()
+        with mock.patch.object(driver.shutil, 'which', return_value='/bin/tool'), \
+                mock.patch.object(driver.subprocess, 'run', return_value=subprocess.CompletedProcess([], 1)):
+            with self.assertRaisesRegex(RuntimeError, 'Docker daemon unreachable'):
+                driver.preflight()
+        with mock.patch.object(driver.shutil, 'which', return_value='/bin/tool'), \
+                mock.patch.object(driver.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)):
+            driver.preflight()
+
+    def test_chrome_resolution(self):
+        with tempfile.TemporaryDirectory() as directory:
+            tools = pathlib.Path(directory)
+            chrome = tools / 'playwright/chromium-123/chrome-linux64/chrome'
+            chrome.parent.mkdir(parents=True)
+            chrome.touch(mode=0o755)
+            with mock.patch.object(driver, 'TOOLS', tools), \
+                    mock.patch.dict(driver.os.environ, {}, clear=True), \
+                    mock.patch.object(driver.shutil, 'which', return_value=None):
+                self.assertEqual(driver.resolve_chrome(), str(chrome))
+                chrome.unlink()
+                with self.assertRaisesRegex(RuntimeError, 'setup --browser'):
+                    driver.resolve_chrome()
+            with mock.patch.dict(driver.os.environ, {'CHROME': '/custom/chrome'}), \
+                    mock.patch.object(driver.shutil, 'which', side_effect=lambda name: name):
+                self.assertEqual(driver.resolve_chrome(), '/custom/chrome')
+            with mock.patch.dict(driver.os.environ, {'CHROME': '/bad/chrome'}), \
+                    mock.patch.object(driver.shutil, 'which', return_value=None):
+                with self.assertRaisesRegex(RuntimeError, 'CHROME is not executable'):
+                    driver.resolve_chrome()
+            for executable in ('google-chrome', 'chromium'):
+                with mock.patch.dict(driver.os.environ, {}, clear=True), \
+                        mock.patch.object(driver.shutil, 'which', side_effect=lambda name:
+                                          '/bin/' + name if name == executable else None):
+                    self.assertEqual(driver.resolve_chrome(), '/bin/' + executable)
+
+    def test_submodule_stamp(self):
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.object(driver, 'ROOT', pathlib.Path(directory)), \
+                mock.patch.object(driver, 'submodule_status', return_value=('abc', True)), \
+                mock.patch.object(driver, 'logged') as logged:
+            stamp = pathlib.Path(directory) / 'artifacts/submodules.sha256'
+            stamp.parent.mkdir()
+            driver.ensure_submodules()
+            self.assertEqual(stamp.read_text(), 'abc')
+            logged.assert_called_once()
+            logged.reset_mock()
+            driver.ensure_submodules()
+            logged.assert_not_called()
+            stamp.write_text('old')
+            driver.ensure_submodules()
+            logged.assert_called_once()
+            with mock.patch.object(driver, 'submodule_status', return_value=('abc', False)):
+                with self.assertRaisesRegex(RuntimeError, 'pinned revisions'):
+                    driver.ensure_submodules()
+
+    def test_setup_check_is_read_only(self):
+        for ready, status in ((True, 0), (False, 1)):
+            with mock.patch.object(driver, 'preflight'), \
+                    mock.patch.object(driver, 'load_project'), \
+                    mock.patch.object(driver, 'setup_components', return_value=[('Node', 'pin', '/cache', ready)]), \
+                    mock.patch.object(driver, 'prerequisites') as prerequisites, \
+                    mock.patch.object(driver, 'logged') as logged:
+                self.assertEqual(driver.setup(check=True), status)
+                prerequisites.assert_not_called()
+                logged.assert_not_called()
+
+    def test_setup_browser_installs_pinned_local_playwright(self):
+        rows = [('Chrome', 'pin', '/cache', True)]
+        with mock.patch.object(driver, 'preflight'), mock.patch.object(driver, 'load_project'), \
+                mock.patch.object(driver, 'setup_components', return_value=rows), \
+                mock.patch.object(driver, 'prerequisites'), \
+                mock.patch.object(driver, 'resolve_chrome', side_effect=RuntimeError('missing')), \
+                mock.patch.object(driver, 'logged') as logged:
+            self.assertEqual(driver.setup(browser=True), 0)
+        args, kwargs = logged.call_args
+        self.assertEqual(args[1][0], driver.NODE.with_name('npx'))
+        self.assertIn(f'playwright@{driver.PLAYWRIGHT_VERSION}', args[1])
+        self.assertEqual(kwargs['env']['PLAYWRIGHT_BROWSERS_PATH'], str(driver.TOOLS / 'playwright'))
+        self.assertEqual(kwargs['env']['npm_config_cache'], str(driver.TOOLS / 'npm-cache'))
+
+    def test_entry_archive_is_cached(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory)
+            target = root / 'artifacts/build-wasm64'
+            target.mkdir(parents=True)
+            (root / 'sdk').mkdir()
+            (root / 'sdk/wasm-entry.cpp').touch()
+            (target / 'libjank-wasm-entry.a').touch()
+            (target / 'compile_commands.json').write_text('[]')
+            with mock.patch.object(driver, 'ROOT', root), \
+                    mock.patch.object(driver, 'wasm_compile_flags', return_value=(['/sdk/em++'], '/build')), \
+                    mock.patch.object(driver, 'logged') as logged:
+                project = mock.Mock(libraries=())
+                driver.ensure_entries(project)
+                logged.assert_not_called()
+                (target / 'libjank-wasm-entry.a').unlink()
+                driver.ensure_entries(project)
+                self.assertEqual(logged.call_count, 2)
+                self.assertIn(f'EM_CONFIG={driver.TOOLS / "gc-wasm/emsdk/.emscripten"}',
+                              logged.call_args_list[0].args[1])
+
+    def test_raylib_provisions_missing_container_tools(self):
+        for status in (0, 1):
+            with tempfile.TemporaryDirectory() as directory, \
+                    mock.patch.object(driver, 'TOOLS', pathlib.Path(directory)), \
+                    mock.patch.object(driver.subprocess, 'run', return_value=subprocess.CompletedProcess([], status)) as probe, \
+                    mock.patch.object(driver, 'logged') as logged:
+                driver.build_raylib('native')
+                self.assertIn('command -v unzip >/dev/null && command -v patch >/dev/null', probe.call_args.args[0])
+                self.assertEqual([call.args[0] for call in logged.call_args_list],
+                                 (['raylib-packages'] if status else []) + ['raylib-native'])
+                self.assertIn('exec docker exec -i', (pathlib.Path(directory) / 'app-bin/patch').read_text())
+
+    def test_scaffold(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = pathlib.Path(directory) / 'hello-world'
+            driver.new_project(root)
+            project = driver.load_project(root)
+            self.assertEqual(project.main, 'hello-world.core')
+            self.assertIsNone(project.zig)
+            self.assertEqual(project.expected('native'), ('Hello from hello-world!',))
+            source = root / 'src/hello_world/core.jank'
+            self.assertIn('(defn -main', source.read_text())
+            with self.assertRaisesRegex(RuntimeError, 'overwrite'):
+                driver.new_project(root)
+            driver.new_project(pathlib.Path(directory) / 'other', 'custom_name')
+            self.assertEqual(driver.load_project(pathlib.Path(directory) / 'other').main, 'custom-name.core')
+            for name in ('', '../bad', '1bad'):
+                with self.assertRaisesRegex(RuntimeError, 'name must'):
+                    driver.new_project(pathlib.Path(directory) / 'invalid', name)
+
     def test_markers(self):
         self.assertTrue(driver.valid_markers('\n'.join(driver.MARKERS)))
 
@@ -72,6 +211,7 @@ class DriverTests(unittest.TestCase):
                 result = subprocess.CompletedProcess([], exitcode,
                     f'<html data-status="{status}"><pre id="stdout">{output}</pre></html>', '')
                 with mock.patch.object(driver, 'server') as server, \
+                        mock.patch.object(driver, 'resolve_chrome', return_value='chrome'), \
                         mock.patch.object(driver.subprocess, 'run', return_value=result), \
                         mock.patch.object(pathlib.Path, 'write_text'):
                     server.return_value.__enter__.return_value = 'http://127.0.0.1/'
@@ -90,6 +230,38 @@ class ProjectTests(unittest.TestCase):
     def load(self):
         (self.root / 'jank-build.json').write_text(driver.json.dumps(self.config))
         return driver.load_project(self.root)
+
+    def test_warm_build_stamp(self):
+        project = self.load()
+        output = self.root / 'output' / project.name
+        with mock.patch.object(driver, 'OUT', output.parent), \
+                mock.patch.object(driver, 'prerequisites'), \
+                mock.patch.object(driver, 'generate_sources', return_value=([], self.root / 'main.cpp')) as generate, \
+                mock.patch.object(driver, 'build_native'), mock.patch.object(driver, 'build_wasm'):
+            for path in (output / 'native' / project.name, output / 'wasm/index.html',
+                         output / 'wasm' / f'{project.name}.js', output / 'wasm' / f'{project.name}.wasm'):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+            with mock.patch.object(driver, 'build_digest', return_value='same'):
+                (output / 'build.sha256').write_text('same')
+                driver.build(self.root)
+                generate.assert_not_called()
+            with mock.patch.object(driver, 'build_digest', return_value='changed'), \
+                    mock.patch.object(driver.shutil, 'copytree'):
+                driver.build(self.root)
+                self.assertEqual(generate.call_count, 2)
+                self.assertEqual((output / 'build.sha256').read_text(), 'changed')
+
+    def test_build_digest_tracks_sources_and_environment(self):
+        project = self.load()
+        with mock.patch.object(driver, 'ROOT', self.root):
+            first = driver.build_digest(project)
+            self.assertEqual(first, driver.build_digest(project))
+            (self.root / 'src/main.jank').write_text('(println "changed")')
+            second = driver.build_digest(project)
+            self.assertNotEqual(first, second)
+            with mock.patch.dict(driver.os.environ, {'JANK_WASM_BUILD_MODE': 'baseline'}):
+                self.assertNotEqual(second, driver.build_digest(project))
 
     def test_defaults(self):
         project = self.load()
@@ -266,6 +438,9 @@ class ProjectTests(unittest.TestCase):
         project = self.load()
         digest = driver.hashlib.sha256(b'patch').hexdigest()
         with mock.patch.object(driver, 'container'), \
+                mock.patch.object(driver, 'preflight'), \
+                mock.patch.object(driver, 'ensure_submodules'), \
+                mock.patch.object(driver, 'ensure_entries'), \
                 mock.patch.object(driver, 'logged') as logged, \
                 mock.patch.object(driver.subprocess, 'run', return_value=subprocess.CompletedProcess([], 0)), \
                 mock.patch.object(driver.subprocess, 'check_output') as output, \
@@ -276,7 +451,7 @@ class ProjectTests(unittest.TestCase):
                 mock.patch.object(pathlib.Path, 'read_text', return_value=digest):
             driver.prerequisites(project)
         output.assert_not_called()
-        self.assertEqual([call.args[0] for call in logged.call_args_list], ['submodules'])
+        logged.assert_not_called()
 
     def test_pure_jank_build_skips_zig_build_file(self):
         self.load()
@@ -298,6 +473,17 @@ class ProjectTests(unittest.TestCase):
             'command': 'em++ -O2 -MD -MT target -MF deps -o out -c /source/src/cpp/jank/runtime/context.cpp'}])
         self.assertEqual(flags, ['em++', '-O2'])
         self.assertEqual(directory, '/build')
+
+    def test_wasm_page_settings(self):
+        for flags, expected in [([], {'modularize': False, 'exportName': 'Module'}),
+                (['-sMODULARIZE=1', '-sEXPORT_NAME=createLive'],
+                 {'modularize': True, 'exportName': 'createLive'}),
+                (['-s', 'MODULARIZE', '-s', 'EXPORT_NAME="createApp"'],
+                 {'modularize': True, 'exportName': 'createApp'}),
+                (['-sMODULARIZE=1', '-sMODULARIZE=0'],
+                 {'modularize': False, 'exportName': 'Module'})]:
+            with self.subTest(flags=flags):
+                self.assertEqual(driver.wasm_page_settings(flags), expected)
 
     def test_wasm_size_modes(self):
         project = self.load()

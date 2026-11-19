@@ -169,6 +169,8 @@ class ProjectTests(unittest.TestCase):
                 self.assertTrue(any(str(arg).endswith('frame-driver.cpp' if frame else 'raylib-loop-driver.cpp') for arg in cpp))
                 self.assertEqual('-sJSPI=1' in link, not bool(frame))
                 self.assertEqual('-Wl,--wrap=EndDrawing' in link, not bool(frame))
+                self.assertEqual('-Wl,--wrap=emscripten_sleep' in link, not bool(frame))
+                self.assertEqual(any(str(arg).endswith('jspi-suspend-guard.js') for arg in link), not bool(frame))
                 self.assertIn('"interactive": true', page)
                 self.assertIn('"frame": ' + ('"hello.core/frame"' if frame else 'null'), page)
 

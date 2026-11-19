@@ -31,6 +31,43 @@ the existing spill transform protects live references. This route requires
 memory64, Wasm exceptions, JSPI and WebGL2 (Chrome 156 tested). It is not a
 claim that every jank application or browser is supported.
 
+## JSPI suspend guard
+
+While main is suspended in emscripten_sleep, browser callbacks (GLFW input,
+resize, focus) re-enter Wasm synchronously on the same linear-memory stack,
+below the suspended stack pointer. Emscripten 7.0.0 wraps only main as a
+promising export, so a callback that reached emscripten_sleep would trap with
+a JSPI SuspendError rather than start a second suspended stack. Nothing in the
+JSPI runtime checks that callbacks leave the suspended frames, including the
+spill slots of the suspended jank frames, untouched.
+
+jank-build links `scripts/jspi-suspend-guard.js` over emscripten_sleep
+(`-Wl,--wrap=emscripten_sleep`). The guard is the Suspending import itself, so
+it has no linear-memory frame inside the checked range. It copies
+`[sp, stack base)` before suspending and aborts with `JSPI SUSPEND GUARD: ...`
+if the stack pointer or any of those bytes differ on resume, or if a second
+suspension starts while one is active. A first version written in C gave false
+positives: the spill pass gave its frame slots that it rewrote after resuming.
+
+```sh
+node scripts/check-jspi-suspend.mjs
+```
+
+The check floods the canvas with key, mouse, wheel, focus and resize events
+for 20 seconds (`JSPI_STRESS_SECONDS`), then flips one byte just below the
+suspended stack pointer (must not fire) and one byte inside the suspended
+frames (must fire). Chrome 156 headless result:
+
+| Phase | Result |
+| --- | --- |
+| Stress, 20 s | 3933 CDP events, 1164 frames, 1164 suspensions, no guard failure; suspended stack 24304 bytes |
+| Write at sp-64 | no failure |
+| Write at sp+12152 | abort: suspended stack frames were overwritten (1 bytes, first at sp+12152) |
+
+The nested-suspension branch has no negative control: no page callback can
+reach emscripten_sleep. The guard copies about 24 KB per frame. It does not
+cover generic frame projects, which use emscripten_set_main_loop without JSPI.
+
 Raylib and raygui are supplied by jank-build's raylib support; their zlib
 licenses are retained by the build recipe. Upstream loads no external images,
 fonts, sounds or other asset files; all drawing uses library primitives.

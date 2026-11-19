@@ -31,16 +31,20 @@ namespace
   bool in_runtime;
   size_t internal_collections;
 
-  bool tagged(object_ref const value)
+  bool heap_ref(object_ref const value)
   {
-    return (reinterpret_cast<uintptr_t>(value.raw()) >> 48) == 0xFFFA;
+#if JANK_NAN_BOXING
+    return detail::is_tagged_pointer(value.raw());
+#else
+    return value.raw() && GC_base(value.raw()) == value.raw();
+#endif
   }
 
   [[gnu::noinline]] size_t watch(object_ref const value)
   {
-    if(!tagged(value) || used == capacity)
+    if(!heap_ref(value) || used == capacity)
     {
-      std::fprintf(stderr, "invalid tag or detector capacity exhausted\n");
+      std::fprintf(stderr, "invalid heap reference or detector capacity exhausted\n");
       std::abort();
     }
     size_t const id{ used++ };
@@ -116,11 +120,11 @@ namespace
 
   [[gnu::noinline]] bool verify(object_ref const value)
   {
-    if(!tagged(value) || value.get_type() != object_type::persistent_vector) { return false; }
+    if(!heap_ref(value) || value.get_type() != object_type::persistent_vector) { return false; }
     for(int i{}; i < 128; ++i)
     {
       object_ref const item{ value.nth(make_box(i)) };
-      if(!tagged(item)) { return false; }
+      if(!heap_ref(item)) { return false; }
       if(i % 2 == 0)
       {
         if(item.get_type() != object_type::integer || item.to_integer() != base + i) { return false; }
@@ -514,7 +518,7 @@ namespace
     size_t const begin{ used };
     internal_collections = 0;
     object_ref map{ make_box<obj::persistent_hash_map>() };
-    if(!tagged(map)) { std::abort(); }
+    if(!heap_ref(map)) { std::abort(); }
     shadow map_guard{ map };
     GC_set_free_space_divisor(64);
     GC_set_on_collection_event(collection);
@@ -529,7 +533,7 @@ namespace
       size_t const end{ used };
       GC_enable();
       map = runtime_assoc(map, key, value);
-      if(!tagged(map)) { std::abort(); }
+      if(!heap_ref(map)) { std::abort(); }
       map_guard.update(map);
       if(!live(begin, end))
       {
@@ -546,7 +550,7 @@ namespace
     for(int i{}; i < 8192; ++i)
     {
       object_ref const value{ map.get(make_box(base + i)) };
-      if(!tagged(value) || value.get_type() != object_type::integer
+      if(!heap_ref(value) || value.get_type() != object_type::integer
          || value.to_integer() != base * 2 + i) { ok = false; break; }
     }
     GC_enable();

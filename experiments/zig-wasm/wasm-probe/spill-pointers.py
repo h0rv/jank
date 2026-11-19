@@ -54,6 +54,7 @@ gc_aware = [f'--pass-arg=gc-spill-pointers-collectors@{",".join(collectors)}',
             '--strip-dwarf', '--gc-spill-pointers']
 passes = {
     'legacy': ['--flatten', '--spill-pointers', *compact],
+    'legacy-no-coalesce': ['--flatten', '--spill-pointers'],
     'legacy-o3': ['--strip-dwarf', '--flatten', '--spill-pointers', '-O3'],
     'gc-aware-compact': [*gc_aware, *compact],
     'gc-aware': [*gc_aware, '-O3'],

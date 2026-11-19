@@ -281,6 +281,32 @@ chunk buffers, sequence traversal and closures. `reduce` still has an explicit
 chunking TODO and traverses element-by-element; this change enables the
 existing map/filter chunked paths, not a new reduction implementation.
 
+## Call-graph-aware spill follow-up
+
+AI-assisted. The default spill pipeline is now Binaryen `--gc-spill-pointers`
+followed by `-O3`; `wasm64-spill-legacy` reruns the previous flatten/spill/
+compaction pipeline on the same link. jank codegen is unchanged. The full
+`measure.py` run passed every target (`BENCHMARK VERDICT: PASS`). Seven
+interleaved repeats of the same link, as medians of per-run warm medians in
+ms:
+
+| Kernel | legacy spill | call-graph-aware spill | unsafe (GC off, one run) |
+| --- | ---: | ---: | ---: |
+| fib27 | 82.020 | 81.685 | 2.817 |
+| vector100k | 70.647 | 69.206 | 35.904 |
+| map100k | 180.205 | 165.757 | 116.079 |
+| lazy100k | 77.319 | 72.934 | 35.017 |
+| strings1k | 2.119 | 1.827 | 1.323 |
+| sort5k | 14.360 | 13.647 | 7.366 |
+
+None of fib27's ~96% spill fraction goes away. Its compiled function reaches
+`GC_malloc_atomic` through the inlined bigint/ratio/real slow paths of generic
+`+`/`-`/`<` (`make_box`), so a sound call graph must spill it. The other
+kernels gain 2–14%, the module shrinks from 19.8 MB to 8.2 MB, and the
+transform drops from 274 s to 39 s. Details, the `legacy-o3` and
+`gc-aware-compact` controls, and the validation matrix are in
+[call-graph-aware post-link spill](../../README.md#call-graph-aware-post-link-spill).
+
 ## wasm32 and MEMORY64=2: three-run comparison
 
 AI-assisted experiment using Emscripten 7.0.0, Node v24.22.2 and an Intel
@@ -406,3 +432,4 @@ HTTP 404. Logs and browser versions are in `browser-results.json` and
 directory. This is not a test of released Safari; the memory64 control also
 ran, so mode 2 was not required for this WebKit build. No visual UI check was
 performed.
+

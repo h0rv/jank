@@ -40,6 +40,8 @@ def wasm_file(bits, variant, suffix):
 
 
 def target_parts(target):
+    if target.endswith('-spill-legacy'):
+        return target.removesuffix('-spill-legacy').removeprefix('wasm'), 'spill-legacy'
     group, variant = target.rsplit('-', 1)
     return group.removeprefix('wasm'), variant
 
@@ -197,14 +199,16 @@ def prepare_mem2(variant):
         ROOT, OUT / 'mem2-reference.wasm', output, source, OUT / 'unsafe.wasm', variant))
 
 
-def spill(bits='64'):
+def spill(bits='64', variant='spill', pipeline=None):
     source = wasm_file(bits, 'unsafe', 'wasm')
-    output = wasm_file(bits, 'spill', 'wasm')
+    output = wasm_file(bits, variant, 'wasm')
     shutil.copyfile(source, output)
-    wasm_file(bits, 'spill', 'js').write_text(wasm_file(bits, 'unsafe', 'js').read_text().replace(source.name, output.name))
+    wasm_file(bits, variant, 'js').write_text(wasm_file(bits, 'unsafe', 'js').read_text().replace(source.name, output.name))
     optimizer = (['env', f'SPILL_WASM_OPT={ROOT / ".tools/gc-wasm/emsdk/upstream/bin/wasm-opt"}']
                  if bits == '32' else [])
-    run(f'wasm{bits}-spill', jb.docker(*optimizer, 'python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, output))
+    if pipeline:
+        optimizer = [*(optimizer or ['env']), f'SPILL_PIPELINE={pipeline}']
+    run(f'wasm{bits}-{variant}', jb.docker(*optimizer, 'python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, output))
 
 
 def execute(target, node):
@@ -250,12 +254,12 @@ def markdown(data):
     for target, row in data['targets'].items():
         if 'module_bytes' in row:
             lines.append(f'| {target} | {row["module_bytes"]} |')
-    lines += ['', '| Kernel | spill / cljs-js (warm) | spill / native (warm) |',
-              '| --- | ---: | ---: |']
+    lines += ['', '| Kernel | spill / cljs-js (warm) | spill / native (warm) | spill / legacy spill (warm) |',
+              '| --- | ---: | ---: | ---: |']
     targets = data['targets']
     for name in EXPECTED:
         ratios = []
-        for baseline in ['cljs-js', 'native']:
+        for baseline in ['cljs-js', 'native', 'wasm64-spill-legacy']:
             a = targets.get('wasm64-spill', {}).get('kernels', {}).get(name)
             b = targets.get(baseline, {}).get('kernels', {}).get(name)
             ratios.append(f'{a["median_ms"] / b["median_ms"]:.3f}×' if a and b and b['median_ms'] else 'N/A')
@@ -265,8 +269,8 @@ def markdown(data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--targets', nargs='+', choices=['cljs-js', 'native', 'wasm64-spill', 'wasm64-unsafe', 'wasm32-spill', 'wasm32-unsafe', 'wasm64-mem2-spill', 'wasm64-mem2-unsafe'],
-                        default=['cljs-js', 'native', 'wasm64-spill', 'wasm64-unsafe'])
+    parser.add_argument('--targets', nargs='+', choices=['cljs-js', 'native', 'wasm64-spill', 'wasm64-spill-legacy', 'wasm64-unsafe', 'wasm32-spill', 'wasm32-unsafe', 'wasm64-mem2-spill', 'wasm64-mem2-unsafe'],
+                        default=['cljs-js', 'native', 'wasm64-spill', 'wasm64-spill-legacy', 'wasm64-unsafe'])
     parser.add_argument('--skip-build', action='store_true')
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
@@ -321,6 +325,9 @@ def main():
                 state['phase'] = 'transform'
                 spill(group.removeprefix('wasm'))
                 spilled.add(group)
+            if target.endswith('-spill-legacy') and not args.skip_build:
+                state['phase'] = 'transform'
+                spill(group.removeprefix('wasm'), 'spill-legacy', 'legacy')
             if 'mem2' in target and not args.skip_build:
                 state['phase'] = 'transform'
                 prepare_mem2(target_parts(target)[1])

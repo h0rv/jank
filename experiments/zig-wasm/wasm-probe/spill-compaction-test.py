@@ -1,5 +1,6 @@
 """AI-assisted regression: local compaction must preserve spill effects."""
 from pathlib import Path
+import os
 import re
 import shutil
 import subprocess
@@ -23,7 +24,8 @@ run([optimizer, root / 'wasm-probe/spill-memory64.wat', *features, '-g', '-o', o
 run([optimizer, out / 'input.wasm', *features, '--flatten', '--spill-pointers', '-g',
      '-o', out / 'before.wasm'])
 shutil.copyfile(out / 'input.wasm', out / 'after.wasm')
-print(run([sys.executable, root / 'wasm-probe/spill-pointers.py', root, out / 'after.wasm']), end='')
+print(subprocess.check_output([sys.executable, root / 'wasm-probe/spill-pointers.py', root, out / 'after.wasm'],
+                              text=True, env={**os.environ, 'SPILL_PIPELINE': 'legacy'}), end='')
 metrics = []
 for variant in ['before', 'after']:
     output = run([optimizer, out / f'{variant}.wasm', *features, '--metrics'])

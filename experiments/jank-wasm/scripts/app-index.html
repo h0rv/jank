@@ -50,6 +50,19 @@
 </script>
 <script>
   const runner = document.createElement('script');
+  const moduleOptions = Module;
+  runner.onload = async () => {
+    if (!config.modularize) return;
+    try {
+      const factory = globalThis[config.exportName];
+      if (typeof factory !== 'function') throw new Error('Missing Emscripten factory: ' + config.exportName);
+      Module = await factory(moduleOptions);
+    } catch (error) {
+      write(error);
+      finish(false);
+    }
+  };
+  runner.onerror = () => { write('Could not load ' + config.script); finish(false); };
   runner.src = config.script;
   document.body.appendChild(runner);
 </script>

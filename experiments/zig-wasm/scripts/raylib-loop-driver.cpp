@@ -2,8 +2,8 @@
 #include <emscripten.h>
 #include <jank/gc.hpp>
 
-extern "C" char __global_base, __data_end;
 int jank_project_main(int argc, char const **argv);
+extern "C" void jank_wasm_register_roots();
 extern "C" void __real_EndDrawing();
 
 extern "C" void __wrap_EndDrawing()
@@ -22,6 +22,6 @@ extern "C" void __wrap_EndDrawing()
 int main(int argc, char const **argv)
 {
   GC_init();
-  GC_add_roots(&__global_base, &__data_end);
+  jank_wasm_register_roots();
   return jank_project_main(argc, argv);
 }

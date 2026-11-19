@@ -25,6 +25,7 @@ The original baseline uses an installed jank compiler for host code generation a
 | Newer Boehm collects on wasm64 with an explicit registered root. | Smoke passed through 32 forced collections. |
 | Newer Boehm discovers local roots with Asyncify. | Current smoke passes, but earlier variants lost live objects. Unresolved. |
 | Tagged-reference lifetime cases against the real jank runtime archive. | Fourteen cases pass natively and with flatten/spill/EH cleanup. Runtime-owned exception root cells protect object/error payloads, rethrow and exception_ptr; the harness exception-storage wrapper is removed. Default/static-only Wasm and test-only shadow slots still fail other cases. See [runtime-owned exceptions](#runtime-owned-exception-roots). |
+| C++ exception storage backed by Boehm GC. | Emscripten link-time allocation/free wraps retain raw and jank-tagged fields in the focused wasm32/wasm64 Node probe. See [link-time exception storage](#link-time-exception-storage). |
 | Binaryen pointer spilling. | Stock SDK fails; preserved names, flattening and a private memory64/EH-cleanup patch cover the measured operands and unwind frames. The separate isolated collector script still uses the unmodified SDK and is not fixed by this experiment. |
 | Fork-built wasm64 static runtime archive, including target core modules. | Built with an explicit collector backport and unsupported-capability gates; see the runtime-archive section. |
 | Generated spike launcher/module plus Zig link against that wasm64 archive. | Linked with Emscripten. Ordinary startup fails; static roots plus the private spill transform reach both markers with GC enabled, including 20 loaded-function entries. |
@@ -210,8 +211,9 @@ registration and the post-link spill transform. **This remains the experimental
 spill/static-root path: ordinary startup still fails.** The collector follow-ups
 below add flattening and private exception-edge spill cleanup, and the runtime
 now owns roots for thrown jank objects and errors
-([runtime-owned exceptions](#runtime-owned-exception-roots)). Arbitrary native
-exceptions with GC-managed fields are outside that contract.
+([runtime-owned exceptions](#runtime-owned-exception-roots)). The Wasm link
+also [roots C++ exception storage](#link-time-exception-storage), including
+native C++ exception fields that Boehm can scan.
 Passing this bounded application is not general GC safety or supported
 Wasm/browser portability. A memory64- and Wasm-exception-capable browser is
 required (the tested Chrome 156 has both). No threads, DOM/fetch application
@@ -2627,6 +2629,32 @@ are not an isolated exception or steady-state GC benchmark. Raw per-case output,
 commands, and startup markers are under ignored
 `artifacts/logs/wasm64-gc-roots-*` and `artifacts/logs/wasm64-startup-spill-*`;
 native output is in `artifacts/logs/host-test.log`.
+
+## Link-time exception storage
+
+The Emscripten `jank-build` link wraps `__cxa_allocate_exception` and
+`__cxa_free_exception`. The shim uses the matching SDK's libc++abi header and
+alignment, allocates a zeroed, scanned block with `GC_malloc_uncollectable`,
+and calls `GC_free` when libc++abi releases the exception. Catch matching,
+exception destruction, and reference counting stay in libc++abi. The native
+link and jank's existing runtime-owned exception roots are unchanged.
+
+With Emscripten 7.0.0 and the patched bdwgc submodule available, run this from
+`experiments/zig-wasm`:
+
+```sh
+bash scripts/check-exception-roots.sh
+```
+
+The Node probe doesn't register static roots or spill Wasm locals. Its
+unwrapped controls lose the payload during unwinding; the wrapped binaries
+keep it alive during unwind, catch, `exception_ptr` retention and rethrow,
+and destruction. It verifies that the last owner frees the backing block,
+the next collection can reclaim the payload, and a throwing constructor
+doesn't leak exception storage. It covers raw GC fields on both widths and
+the jank pointer tag on wasm64. Fields still have to use a representation
+Boehm can scan; arbitrary encoded pointers, host links, and WASI builds are
+not covered by this shim.
 
 ## wasm32 raw-reference runtime and GC-enabled Zig spike
 

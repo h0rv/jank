@@ -416,6 +416,8 @@ def build_wasm(project, stage, modules, launcher, run):
                          'void jank_wasm_register_roots() {\n'
                          'GC_add_roots(&__global_base, &__data_end);\n}\n}\n')
         sources.append((roots, []))
+    libcxxabi = pathlib.Path(flags[0]).resolve().parent / 'system/lib/libcxxabi/src'
+    sources.append((ROOT / 'scripts/exception-roots.cpp', ['-isystem', libcxxabi]))
     objects = []
     for index, (source, extra) in enumerate(sources):
         obj = stage / f'module-{index}.o'
@@ -442,6 +444,7 @@ def build_wasm(project, stage, modules, launcher, run):
                 *(['-sJSPI=1', '-Wl,--wrap=EndDrawing', '-Wl,--wrap=emscripten_sleep',
                     '--js-library', ROOT / 'scripts/jspi-suspend-guard.js']
                   if synchronous_raylib else []),
+                 '-Wl,--wrap=__cxa_allocate_exception,--wrap=__cxa_free_exception',
                 '-Wl,--error-limit=0', '-o', js])
     run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm'), mode])
     arguments = ['continuous', '20'] if project.wasm_check == 'spike-continuous' else ['static-roots']

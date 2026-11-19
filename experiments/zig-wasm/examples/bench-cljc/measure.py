@@ -149,10 +149,15 @@ def build_jank(platform, state):
         '-Wl,--error-limit=0', '-o', OUT / 'unsafe.js'])
 
 
-def spill():
-    shutil.copyfile(OUT / 'unsafe.wasm', OUT / 'spill.wasm')
-    (OUT / 'spill.js').write_text((OUT / 'unsafe.js').read_text().replace('unsafe.wasm', 'spill.wasm'))
-    run('wasm-spill', jb.docker('python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, OUT / 'spill.wasm'))
+SPILL_TARGETS = {'wasm64-spill': ('spill', 'gc-aware'), 'wasm64-spill-legacy': ('spill-legacy', 'legacy')}
+
+
+def spill(target):
+    name, pipeline = SPILL_TARGETS[target]
+    shutil.copyfile(OUT / 'unsafe.wasm', OUT / f'{name}.wasm')
+    (OUT / f'{name}.js').write_text((OUT / 'unsafe.js').read_text().replace('unsafe.wasm', f'{name}.wasm'))
+    run(f'wasm-{name}', jb.docker('env', f'SPILL_PIPELINE={pipeline}', 'python3',
+                                  ROOT / 'wasm-probe/spill-pointers.py', ROOT, OUT / f'{name}.wasm'))
 
 
 def execute(target, node):
@@ -165,7 +170,8 @@ def execute(target, node):
         result = subprocess.run(jb.docker('python3', '-c', script), check=True,
                                 capture_output=True, text=True, timeout=600)
         return json.loads(result.stdout)
-    file = {'cljs-js': 'cljs-run.cjs', 'wasm64-spill': 'spill.js', 'wasm64-unsafe': 'unsafe.js'}[target]
+    file = {'cljs-js': 'cljs-run.cjs', 'wasm64-spill': 'spill.js', 'wasm64-spill-legacy': 'spill-legacy.js',
+            'wasm64-unsafe': 'unsafe.js'}[target]
     args = [node, OUT / file, *(['unsafe-no-gc'] if target == 'wasm64-unsafe' else [])]
     start = time.perf_counter()
     result = subprocess.run(list(map(str, args)), capture_output=True, text=True, timeout=600)
@@ -193,12 +199,12 @@ def markdown(data):
     for target, row in data['targets'].items():
         for name, kernel in row.get('kernels', {}).items():
             lines.append(f'| {name} | {target} | {kernel["checksum"]} | {kernel["first_ms"]:.3f} | {kernel["median_ms"]:.3f} |')
-    lines += ['', '| Kernel | spill / cljs-js (warm) | spill / native (warm) |',
-              '| --- | ---: | ---: |']
+    lines += ['', '| Kernel | spill / cljs-js (warm) | spill / native (warm) | spill / legacy spill (warm) |',
+              '| --- | ---: | ---: | ---: |']
     targets = data['targets']
     for name in EXPECTED:
         ratios = []
-        for baseline in ['cljs-js', 'native']:
+        for baseline in ['cljs-js', 'native', 'wasm64-spill-legacy']:
             a = targets.get('wasm64-spill', {}).get('kernels', {}).get(name)
             b = targets.get(baseline, {}).get('kernels', {}).get(name)
             ratios.append(f'{a["median_ms"] / b["median_ms"]:.3f}×' if a and b and b['median_ms'] else 'N/A')
@@ -208,8 +214,9 @@ def markdown(data):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--targets', nargs='+', choices=['cljs-js', 'native', 'wasm64-spill', 'wasm64-unsafe'],
-                        default=['cljs-js', 'native', 'wasm64-spill', 'wasm64-unsafe'])
+    parser.add_argument('--targets', nargs='+',
+                        choices=['cljs-js', 'native', 'wasm64-spill', 'wasm64-spill-legacy', 'wasm64-unsafe'],
+                        default=['cljs-js', 'native', 'wasm64-spill', 'wasm64-spill-legacy', 'wasm64-unsafe'])
     parser.add_argument('--skip-build', action='store_true')
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
@@ -256,9 +263,9 @@ def main():
                     raise
                 built.add(group)
             row.update(compile='PASS', link='PASS' if group != 'cljs-js' else 'N/A (Closure advanced)')
-            if target == 'wasm64-spill' and not args.skip_build:
+            if target in SPILL_TARGETS and not args.skip_build:
                 state['phase'] = 'transform'
-                spill()
+                spill(target)
             state['phase'] = 'execute'
             sample = execute(target, node)
             (OUT / f'{target}-run.log').write_text(sample['output'])

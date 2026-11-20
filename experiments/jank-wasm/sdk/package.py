@@ -155,7 +155,8 @@ def main():
         shutil.rmtree(SDK)
     SDK.mkdir(parents=True)
     for path in ['scripts/jank-build.py', 'scripts/app-index.html',
-                 'scripts/raylib-loop-driver.cpp', 'sdk/wasm-entry.cpp',
+                 'scripts/raylib-loop-driver.cpp', 'scripts/jspi-suspend-guard.js',
+                 'scripts/exception-roots.cpp', 'sdk/wasm-entry.cpp',
                  'wasm-probe/spill-pointers.py']:
         copy(ROOT / path, SDK / path)
     copy(ROOT / 'sdk/jank-wasm.py', SDK / 'scripts/jank-wasm.py')

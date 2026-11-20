@@ -318,6 +318,21 @@ class ProjectTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'cannot be combined'):
             self.load()
 
+    def test_between_frame_gc_requires_frame(self):
+        self.assertFalse(self.load().between_frame_gc)
+        self.config['wasm'] = {'gc': 'between-frames'}
+        with self.assertRaisesRegex(RuntimeError, 'requires a returning frame'):
+            self.load()
+        self.config['frame'] = 'hello.core/frame'
+        self.assertTrue(self.load().between_frame_gc)
+        self.config['wasm']['link_flags'] = ['-pthread']
+        with self.assertRaisesRegex(RuntimeError, 'does not support pthreads'):
+            self.load()
+        del self.config['wasm']['link_flags']
+        self.config['wasm']['gc'] = 'garbage'
+        with self.assertRaisesRegex(RuntimeError, 'wasm.gc must be'):
+            self.load()
+
     def test_wasm_driver_and_link_options(self):
         template = (driver.ROOT / 'scripts/app-index.html').read_text()
         (self.root / 'scripts').mkdir()
@@ -325,11 +340,12 @@ class ProjectTests(unittest.TestCase):
         target = self.root / 'artifacts/build-wasm64'
         target.mkdir(parents=True)
         (target / 'compile_commands.json').write_text('[]')
-        for frame in (None, 'hello.core/frame'):
-            with self.subTest(frame=frame):
+        for frame, gc in ((None, 'spill'), ('hello.core/frame', 'spill'),
+                          ('hello.core/frame', 'between-frames')):
+            with self.subTest(frame=frame, gc=gc):
                 if frame:
                     self.config['frame'] = frame
-                self.config.update(libraries=['raylib'], wasm={'link_flags': ['-sASSERTIONS=1']})
+                self.config.update(libraries=['raylib'], wasm={'link_flags': ['-sASSERTIONS=1'], 'gc': gc})
                 project = self.load()
                 calls = []
                 def run(label, args, **kwargs):
@@ -345,9 +361,20 @@ class ProjectTests(unittest.TestCase):
                 self.assertIn(f'-sEXIT_RUNTIME={0 if frame else 1}', link)
                 self.assertIn('-sUSE_GLFW=3', link)
                 self.assertIn('-sASSERTIONS=1', link)
+                if project.between_frame_gc:
+                    self.assertIn('-sASYNCIFY=0', link)
+                    self.assertIn('-sJSPI=0', link)
+                    self.assertIn('-sSHARED_MEMORY=0', link)
+                    self.assertNotIn('-g2', link)
+                else:
+                    self.assertIn('-g2', link)
+                self.assertEqual(any(label == 'spill' for label, _ in calls), not project.between_frame_gc)
                 entry = next(args for label, args in calls if label == 'entry')
                 self.assertTrue(any(str(arg).endswith('wasm-entry.cpp' if frame else 'raylib-loop-driver.cpp') for arg in entry))
-                self.assertIn(target / ('libjank-wasm-entry.a' if frame else 'libjank-wasm-raylib-entry.a'), link)
+                entry_name = ('libjank-wasm-between-frame-entry.a' if project.between_frame_gc else
+                              'libjank-wasm-entry.a' if frame else 'libjank-wasm-raylib-entry.a')
+                self.assertIn(target / entry_name, link)
+                self.assertEqual('-DJANK_WASM_BETWEEN_FRAME_GC' in entry, project.between_frame_gc)
                 if frame:
                     self.assertIn('"hello.core"', (self.root / 'wasm-config.cpp').read_text())
                     self.assertIn('"frame"', (self.root / 'wasm-config.cpp').read_text())

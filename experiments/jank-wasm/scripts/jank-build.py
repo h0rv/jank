@@ -89,6 +89,7 @@ class Project:
     native_link_flags: tuple[str, ...] = ()
     wasm_link_flags: tuple[str, ...] = ()
     frame: str | None = None
+    between_frame_gc: bool = False
 
     @property
     def out(self):
@@ -168,8 +169,18 @@ def load_project(directory=ROOT, *, require_expect=True):
         raise RuntimeError('frame must be a qualified ns/fn var')
     if frame and mode != 'single':
         raise RuntimeError('frame cannot be combined with spike-continuous')
+    gc = data.get('wasm', {}).get('gc', 'spill')
+    if gc not in ('spill', 'between-frames'):
+        raise RuntimeError('wasm.gc must be spill or between-frames')
+    if gc == 'between-frames' and not frame:
+        raise RuntimeError('wasm.gc=between-frames requires a returning frame callback')
+    if gc == 'between-frames' and any(
+            flag in ('-pthread', '-pthreads') or re.fullmatch(r'(?:-s)?USE_PTHREADS(?:=.*)?', flag)
+            for flag in link_flags['wasm']):
+        raise RuntimeError('wasm.gc=between-frames does not support pthreads')
     return Project(root, name, main, jank, expectations, mode, libraries,
-                   tuple(includes), link_flags['native'], link_flags['wasm'], frame)
+                   tuple(includes), link_flags['native'], link_flags['wasm'], frame,
+                   between_frame_gc=gc == 'between-frames')
 
 
 @dataclass(frozen=True)
@@ -270,7 +281,8 @@ def prerequisites(project):
     stamp = optimizer.parent / 'jank-memory64-patch.sha256'
     patch = ROOT / 'wasm-probe/binaryen-memory64-stack.patch'
     digest = hashlib.sha256(patch.read_bytes()).hexdigest()
-    if not optimizer.is_file() or not stamp.is_file() or stamp.read_text() != digest:
+    if not project.between_frame_gc and (
+            not optimizer.is_file() or not stamp.is_file() or stamp.read_text() != digest):
         archive = TOOLS / 'binaryen.tar.gz'
         source = TOOLS / 'binaryen-a9141c8cc'
         if not archive.is_file():
@@ -372,8 +384,9 @@ def setup_components(project, browser=False):
     optimizer = ROOT / 'artifacts/build-binaryen/bin/wasm-opt'
     stamp = optimizer.parent / 'jank-memory64-patch.sha256'
     digest = hashlib.sha256((ROOT / 'wasm-probe/binaryen-memory64-stack.patch').read_bytes()).hexdigest()
-    rows.append(('Binaryen', 'a9141c8cc + private patch', optimizer,
-                 optimizer.is_file() and stamp.is_file() and stamp.read_text() == digest))
+    if not project.between_frame_gc:
+        rows.append(('Binaryen', 'a9141c8cc + private patch', optimizer,
+                     optimizer.is_file() and stamp.is_file() and stamp.read_text() == digest))
     if 'raylib' in project.libraries:
         for platform in ('native', 'wasm64'):
             rows.append((f'raylib {platform}', '6.0 / raygui 2026.09-5',
@@ -585,11 +598,14 @@ def build_wasm(project, stage, modules, launcher, run):
         entry = None
     elif synchronous_raylib:
         entry = target / 'libjank-wasm-raylib-entry.a'
+    elif project.between_frame_gc:
+        entry = target / 'libjank-wasm-between-frame-entry.a'
     if entry is not None:
         source = ROOT / ('scripts/raylib-loop-driver.cpp' if synchronous_raylib else 'sdk/wasm-entry.cpp')
         if not entry.exists() or source.stat().st_mtime > entry.stat().st_mtime:
             obj = entry.with_suffix('.o')
-            run('entry', [*flags, '-O2', '-g', '-c', source, '-o', obj], cwd=cwd)
+            entry_flags = ['-DJANK_WASM_BETWEEN_FRAME_GC'] if project.between_frame_gc else []
+            run('entry', [*flags, *entry_flags, '-O2', '-g', '-c', source, '-o', obj], cwd=cwd)
             run('entry-archive', [pathlib.Path(flags[0]).with_name('emar'), 'rcs', entry, obj])
     if project.frame:
         namespace, function = project.frame.split('/')
@@ -616,8 +632,14 @@ def build_wasm(project, stage, modules, launcher, run):
     output = project.out / 'wasm'
     output.mkdir(parents=True, exist_ok=True)
     js = output / f'{project.name}.js'
-    # The spill transform needs __stack_pointer's global name until post-link.
-    run('link', [flags[0], '-O2', *(['-g', '--profiling-funcs'] if mode == 'baseline' else ['-g2']),
+    # Only the spill transform needs __stack_pointer's global name after link.
+    if mode == 'baseline':
+        link_optimization = ['-O2', '-g', '--profiling-funcs']
+    elif project.between_frame_gc:
+        link_optimization = [f'-{mode}' if mode != 'strip' else '-O2']
+    else:
+        link_optimization = ['-O2', '-g2']
+    run('link', [flags[0], *link_optimization,
                 *lto, '-sMEMORY64=1',
                 '-fwasm-exceptions', '-sALLOW_MEMORY_GROWTH=1',
                 f'-sEXIT_RUNTIME={0 if project.frame else 1}',
@@ -627,9 +649,12 @@ def build_wasm(project, stage, modules, launcher, run):
                 *(['-sJSPI=1', '-Wl,--wrap=EndDrawing', '-Wl,--wrap=emscripten_sleep',
                     '--js-library', ROOT / 'scripts/jspi-suspend-guard.js']
                   if synchronous_raylib else []),
+                *(['-sASYNCIFY=0', '-sJSPI=0', '-sSHARED_MEMORY=0', '-sWASM_WORKERS=0']
+                  if project.between_frame_gc else []),
                  '-Wl,--wrap=__cxa_allocate_exception,--wrap=__cxa_free_exception',
                 '-Wl,--error-limit=0', '-o', js])
-    run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm'), mode])
+    if not project.between_frame_gc:
+        run('spill', ['python3', ROOT / 'wasm-probe/spill-pointers.py', ROOT, js.with_suffix('.wasm'), mode])
     arguments = ['continuous', '20'] if project.wasm_check == 'spike-continuous' else ['static-roots']
     js.write_text("var Module = typeof Module !== 'undefined' ? Module : {};\n"
                   f'Module.arguments ??= {json.dumps(arguments)};\n' + js.read_text())

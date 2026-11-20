@@ -1,0 +1,18 @@
+;; AI-assisted browser driver; the vendored game still owns gameplay and drawing.
+(ns flappy-frame.loop
+  (:require [org.jank-lang.example.flappy-bird :as bird])
+  (:include "raylib.h"))
+
+(def game-state (volatile! nil))
+
+(defn -main [& _]
+  (cpp/InitWindow bird/screen-width bird/screen-height "janky bird")
+  (vreset! game-state (bird/start-game bird/default-state))
+  (println "flappy-frame: initialized"))
+
+(defn frame []
+  (let [state (bird/step-frame @game-state)
+        _ (cpp/BeginDrawing)
+        state (bird/draw-frame! state)]
+    (cpp/EndDrawing)
+    (vreset! game-state state)))

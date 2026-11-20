@@ -155,7 +155,8 @@ def main():
         shutil.rmtree(SDK)
     SDK.mkdir(parents=True)
     for path in ['scripts/jank-build.py', 'scripts/app-index.html',
-                 'scripts/raylib-loop-driver.cpp', 'sdk/wasm-entry.cpp',
+                 'scripts/raylib-loop-driver.cpp', 'scripts/jspi-suspend-guard.js',
+                 'scripts/exception-roots.cpp', 'sdk/wasm-entry.cpp',
                  'wasm-probe/spill-pointers.py']:
         copy(ROOT / path, SDK / path)
     copy(ROOT / 'sdk/jank-wasm.py', SDK / 'scripts/jank-wasm.py')
@@ -176,10 +177,11 @@ def main():
         'command': shlex.join([*wasm_flags, '-c', '/src/cpp/jank/runtime/context.cpp'])}]))
     copy(ROOT / 'artifacts/build-wasm64/libjank-static-runtime.a', target / 'libjank-static-runtime.a')
     emsdk = ROOT / '.tools/gc-wasm/emsdk'
-    common.command(common.docker('env', f'EM_CONFIG={emsdk / ".emscripten"}',
-                   emsdk / 'upstream/emscripten/em++', '-x', 'c++', '/dev/null', '--no-entry',
-                   '-sMEMORY64=1', '-fwasm-exceptions', '-sUSE_GLFW=3', '-sMAX_WEBGL_VERSION=2',
-                   '-sJSPI=1', '-sALLOW_MEMORY_GROWTH=1', '-o', target / 'cache-warm.js'))
+    for link_flags in (['-sJSPI=1'], ['-Oz', '-sEXIT_RUNTIME=0']):
+        common.command(common.docker('env', f'EM_CONFIG={emsdk / ".emscripten"}',
+                       emsdk / 'upstream/emscripten/em++', '-x', 'c++', '/dev/null', '--no-entry',
+                       '-sMEMORY64=1', '-fwasm-exceptions', '-sUSE_GLFW=3', '-sMAX_WEBGL_VERSION=2',
+                       '-sALLOW_MEMORY_GROWTH=1', *link_flags, '-o', target / 'cache-warm.js'))
     for directory in ('upstream/bin', 'upstream/lib/clang', 'upstream/share', 'upstream/emscripten'):
         source = emsdk / directory
         if source.exists():

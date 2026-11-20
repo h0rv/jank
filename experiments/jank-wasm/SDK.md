@@ -38,13 +38,14 @@ calls the existing resource-directory C API before compiler startup; launcher
 generation uses C++ output and syntax checking, not a native application link.
 No compiler, language, or object-model changes are involved.
 
-Static-root registration is generated and linked automatically. The common
-entry disables collection while jank executes and collects at empty-stack
-safepoints; configured browser frames retain the collection cadence and stats
-API. Synchronous raylib applications use the separate prebuilt loop adapter.
-The driver applies the experimental spill transform by default. A synchronous
-single-threaded `frame` project can opt out with
-[`"wasm": {"gc": "between-frames"}`](README.md#c-libraries-and-interactive-browser-frames).
+Static-root registration is generated and linked automatically. Configured
+browser frames retain the collection cadence and stats API. Synchronous
+raylib applications use the separate prebuilt loop adapter. The driver
+applies the experimental spill transform by default. A synchronous
+single-threaded `frame` project can set `"wasm": {"gc": "between-frames"}`
+to collect in a separate Wasm call after each collection frame has returned,
+without spilling. Values kept between frames must be rooted in GC-visible
+static storage or scanned heap.
 
 Limits: wasm64 only; Chrome/Node must support memory64 and Wasm exceptions
 (synchronous browser loops also require JSPI). This is the experimental

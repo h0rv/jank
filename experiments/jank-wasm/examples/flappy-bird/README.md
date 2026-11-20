@@ -101,3 +101,30 @@ STRESS=1 PLAY_SECONDS=60 STARTUP_RUNS=1 node scripts/measure-flappy-gc.mjs \
 Pass `spill` to `build-frame-loop.sh` to build the same returning-frame driver
 with the spill transform. The Chrome harness sets 30 frames between collections
 for both returning variants unless `COLLECT_EVERY` is set.
+
+### Chrome comparison
+
+Headless Chrome 156 with SwiftShader, sequential runs on one Linux VM.
+Each build played for three minutes, including Space input and restarts.
+Startup is navigation to first frame across five loads with the HTTP cache
+disabled; frame times are intervals between frame telemetry samples.
+
+| Metric | [Published JSPI + spill release][flappy-release] | Returning frames, no spill |
+| --- | ---: | ---: |
+| Median startup (first load), ms | 343 (583) | 177 (571) |
+| Frame interval p50 / p95 / p99, ms | 16.7 / 21.0 / 25.3 | 16.7 / 24.0 / 34.2 |
+| Wasm, raw / gzip -9, bytes | 6,976,938 / 1,109,100 | 3,246,692 / 816,841 |
+| Boehm heap, first → last, MiB | 23.89 → 23.89 | 56.63 → 56.63 |
+| Boehm used, first → last (peak), MiB | 20.14 → 18.72 (23.87) | 25.89 → 26.76 (27.77) |
+| Wasm linear memory, first → last, MiB | 31.44 → 37.75 | 67.81 → 67.81 |
+
+The opt-in reduced Wasm size and median startup, but had higher tail frame
+times and started with a larger heap. Neither Boehm heap grew during the play
+sample. The two releases differ in driver and optimization pipeline, so the
+table measures the whole build change, not the spill pass in isolation.
+With a full collection every frame, the opt-in completed 3,576 frames and
+12 restarts in one minute with no runtime errors. A separate Chrome play test
+verified pause/resume, collision and restart under the same stress setting.
+Long initializers or frames still cannot collect until they return.
+
+[flappy-release]: https://github.com/h0rv/jank-wasm/commit/d56992c684570b166ca2c422e3fba0995cf1a0b1

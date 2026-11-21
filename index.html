@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jank-wasm</title>
-<link rel="stylesheet" href="style.css?v=6ffd9ef8390e">
+<link rel="stylesheet" href="style.css?v=4ee5df45f9c7">
 <header class="bar">
   <a class="name" href="index.html">jank-wasm</a>
   <nav><a href="research.html">Research</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md#one-command-native--wasm">Build</a><a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md">Notes</a><a href="https://github.com/h0rv/jank-wasm">GitHub</a></nav>
@@ -16,7 +16,7 @@
   <h2>Flappy Bird</h2>
   <p>A raylib game compiled from the same jank source for native and wasm64.</p>
   <p>Click New game, then hold Space to rise; release to fall. P pauses, Enter returns to the menu.</p>
-  <iframe class="game-frame" src="flappy-bird.html?v=6ffd9ef8390e" title="Live Flappy Bird game" loading="eager"></iframe>
+  <iframe class="game-frame" src="flappy-bird.html?v=4ee5df45f9c7" title="Live Flappy Bird game" loading="eager"></iframe>
   <noscript><p>Requires JavaScript, memory64, Wasm exceptions, JSPI and WebGL2.</p></noscript>
   <p class="note">Requires memory64, Wasm exceptions, JSPI and WebGL2. Runs in current Chrome (tested with Chrome 156).</p>
   <p><a href="https://github.com/jank-lang/jank/tree/a013d8dfe6b6ab18618ac20d73a5e99f50af2433/example/gui/flappy-bird">jank's official flappy-bird example</a>, with unchanged source (<a href="flappy-bird-LICENSE">MPL-2.0</a>). <a href="flappy-bird.jank">Source</a> · <a href="https://github.com/h0rv/jank-wasm/tree/main/experiments/jank-wasm/examples/flappy-bird">Build notes</a>.</p>
@@ -67,12 +67,12 @@
     <thead><tr><th>Target</th><th>Result</th></tr></thead>
     <tbody>
       <tr><td>wasm64, Emscripten, browser and Node</td><td>Runs with explicit static roots and a Binaryen spill pass. This page.</td></tr>
-      <tr><td>wasm32, Emscripten, Node</td><td>Runs the spike with the same roots and spill pass, 20 of 20 runs with GC on.</td></tr>
-      <tr><td>wasm32-wasip1, Wasmtime</td><td>Runs the spike, 20 of 20 runs with GC on. nREPL is left out.</td></tr>
+      <tr><td>wasm32, Emscripten, Node</td><td>Ran the earlier spike program with the same roots and spill pass, 20 of 20 runs with GC on. That program is no longer on main.</td></tr>
+      <tr><td>wasm32-wasip1, Wasmtime</td><td>Ran the earlier spike program, 20 of 20 runs with GC on. nREPL is left out.</td></tr>
       <tr><td>Exceptions</td><td>The runtime roots thrown jank objects and errors, including rethrows and copied <code>exception_ptr</code>s.</td></tr>
       <tr><td>Test suite, wasm64, Node, GC stress</td><td>134/134 doctests and 536 fixtures pass; 7 known jank-level gaps. Runner exits 0.</td></tr>
       <tr><td>Lifetime matrix</td><td>14/14 cases pass on wasm32 and wasm64 with the spill pass.</td></tr>
-      <tr><td>Live example, selected release</td><td>1.08 MB gzip -9 in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/size/REPORT.md">size report</a>.</td></tr>
+      <tr><td>Live example, published build</td><td>1.05 MB gzip -9 (6.80 MB raw). The selected release in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/size/REPORT.md">size report</a> measured 1.08 MB.</td></tr>
       <tr><td>Speed</td><td>Slower than ClojureScript on most <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/examples/bench-cljc/REPORT.md">benchmark kernels</a>; native <code>fib27</code> is faster.</td></tr>
     </tbody>
   </table>
@@ -87,5 +87,5 @@
   <p>How it works, its gaps and next steps are on the <a href="research.html">research page</a>. Details and evidence are in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/README.md">experiment notes</a>.</p>
 </main>
 <footer>Research fork, kept out of upstream jank. Code and text written with AI assistance.</footer>
-<script src="runner.js?v=6ffd9ef8390e"></script>
+<script src="runner.js?v=4ee5df45f9c7"></script>
 </html>

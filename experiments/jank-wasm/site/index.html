@@ -67,12 +67,12 @@
     <thead><tr><th>Target</th><th>Result</th></tr></thead>
     <tbody>
       <tr><td>wasm64, Emscripten, browser and Node</td><td>Runs with explicit static roots and a Binaryen spill pass. This page.</td></tr>
-      <tr><td>wasm32, Emscripten, Node</td><td>Runs the spike with the same roots and spill pass, 20 of 20 runs with GC on.</td></tr>
-      <tr><td>wasm32-wasip1, Wasmtime</td><td>Runs the spike, 20 of 20 runs with GC on. nREPL is left out.</td></tr>
+      <tr><td>wasm32, Emscripten, Node</td><td>Ran the earlier spike program with the same roots and spill pass, 20 of 20 runs with GC on. That program is no longer on main.</td></tr>
+      <tr><td>wasm32-wasip1, Wasmtime</td><td>Ran the earlier spike program, 20 of 20 runs with GC on. nREPL is left out.</td></tr>
       <tr><td>Exceptions</td><td>The runtime roots thrown jank objects and errors, including rethrows and copied <code>exception_ptr</code>s.</td></tr>
       <tr><td>Test suite, wasm64, Node, GC stress</td><td>134/134 doctests and 536 fixtures pass; 7 known jank-level gaps. Runner exits 0.</td></tr>
       <tr><td>Lifetime matrix</td><td>14/14 cases pass on wasm32 and wasm64 with the spill pass.</td></tr>
-      <tr><td>Live example, selected release</td><td>1.08 MB gzip -9 in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/size/REPORT.md">size report</a>.</td></tr>
+      <tr><td>Live example, published build</td><td>1.05 MB gzip -9 (6.80 MB raw). The selected release in the <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/size/REPORT.md">size report</a> measured 1.08 MB.</td></tr>
       <tr><td>Speed</td><td>Slower than ClojureScript on most <a href="https://github.com/h0rv/jank-wasm/blob/main/experiments/jank-wasm/examples/bench-cljc/REPORT.md">benchmark kernels</a>; native <code>fib27</code> is faster.</td></tr>
     </tbody>
   </table>

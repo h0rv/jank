@@ -185,7 +185,9 @@ prints a verdict table. Logs and browser DOM evidence are in
 
 The default release build measured `live.wasm` at **7.87 MB raw / 1.08 MB
 gzip -9** and `flappy-bird.wasm` at **8.05 MB / 1.14 MB**, using decimal MB.
-See the Selected row in the [size report](size/REPORT.md).
+See the Selected row in the [size report](size/REPORT.md). The files published on
+the site on 2026-11-19 are smaller: `live.wasm` 6.80 MB / 1.05 MB gzip -9 and
+`flappy-bird.wasm` 6.98 MB / 1.11 MB.
 
 ### C libraries and interactive browser frames
 
@@ -279,7 +281,7 @@ Wasm/browser portability. A memory64- and Wasm-exception-capable browser is
 required (the tested Chrome 156 has both). No threads, DOM/fetch application
 API or general browser platform layer is supplied.
 
-Run these commands from this directory. Put the pinned Zig version, Node and a compatible jank on PATH. `mise exec -- bash ...` can supply the pinned Zig version.
+These scripts were removed from main with the Zig add-on; run them from a [`zig-addon`](https://github.com/h0rv/jank-wasm/tree/zig-addon/experiments/jank-wasm) checkout. Put the pinned Zig version, Node and a compatible jank on PATH. `mise exec -- bash ...` can supply the pinned Zig version.
 
 ```sh
 bash scripts/check-jank.sh
@@ -352,7 +354,7 @@ BOOTSTRAP=1 bash scripts/check-gc-wasm.sh all
 
 That command downloads an official prebuilt SDK and source archives. It does not build LLVM from source or install system packages. Its expected current exit status is 1 because the spill test fails. Do not change the test to hide this failure.
 
-After SDK bootstrap and native C++ source generation:
+After SDK bootstrap and native C++ source generation, on `zig-addon`:
 
 ```sh
 bash scripts/check-jank-wasm-object.sh
@@ -1208,8 +1210,8 @@ Triage of the eight earlier failures (1 doctest, 7 fixtures):
 | `macro/pass-return-vector`, `reader-macro/function/pass-syntax-quote` | A macro defined in the wrapped body was never defined when the call was analyzed, so it was called as a function | runner staging | Fixed: per-form staging |
 | `syntax-quote/pass-resolve-alias` | The alias was not established when the syntax quote was analyzed | runner staging | Fixed: per-form staging |
 | `syntax-quote/unquote-splice/pass-body` | Same macro staging cause | runner staging | Fixed: per-form staging |
-| `form/case/pass-big-integer` | AOT stores lifted big-integer constants untagged in `object_ref` slots (`new (&c) auto(make_box<big_integer>(...))`), so NaN-boxing reads `1N` as a small real | jank AOT codegen | Reported; known gap |
-| `metadata/fail-with-meta-not-metadatable` | AOT-compiled calls do not attach call-site source to runtime errors; the fixture contract requires a source | jank AOT codegen | Reported; known gap |
+| `form/case/pass-big-integer` | AOT stores lifted big-integer constants untagged in `object_ref` slots (`new (&c) auto(make_box<big_integer>(...))`), so NaN-boxing reads `1N` as a small real; also reproduces with upstream jank's native AOT | jank AOT codegen | Known gap |
+| `metadata/fail-with-meta-not-metadatable` | AOT-compiled calls do not attach call-site source to runtime errors; the fixture contract requires a source | jank AOT codegen | Known gap |
 
 Per-form staging also made four previously host-rejected positive fixtures
 run. Three pass. `var/ref/pass-private` fails because AOT qualifies a `def`
@@ -1987,7 +1989,8 @@ exact pass order, patch and 4-MiB stack, with no extra optimization pass.
 We did not rerun spill-only or an all-`-O0` runtime build. These measurements
 do not isolate individual pass costs or establish general GC safety.
 
-Reproduce from `experiments/jank-wasm`:
+Reproduce from `experiments/jank-wasm` on `zig-addon`; `measure-spill-cost.py` and
+the spike project are no longer on main:
 
 ```sh
 ./jank-build build
@@ -2167,7 +2170,8 @@ trusted after flatten/coalesce (Binaryen warns about their incompatibility).
 This change did not close the then-open thrown-payload root gap; the later
 [runtime-owned exception roots](#runtime-owned-exception-roots) closed it for jank objects and errors.
 
-Reproduce sequentially from this directory (do not rebuild/check concurrently
+Reproduce sequentially from this directory on `zig-addon`, which still has
+`measure-spill-cost.py` and the spike project (do not rebuild/check concurrently
 with measurement, since `check` recreates the staged sources):
 
 ```sh
@@ -3238,7 +3242,8 @@ correctness. There is no general WASI-support claim.
 
 ### Reproduce the shim route
 
-From the repository root:
+From the repository root of a `zig-addon` checkout (`wasi-probe.sh` and
+`wasi-standalone-link.sh` are not on main):
 
 ```sh
 bash experiments/jank-wasm/scripts/wasi-probe.sh
@@ -3313,7 +3318,7 @@ flag cannot replace bdwgc. See the separate
 
 ## Files
 
-`native.zig` contains the implementation and three unit tests. It exports widening arithmetic and a borrowed-buffer function with explicit status values. The jank caller tests scalar arguments, a 64-bit result, and the borrowed-buffer cases below.
+The spike files below are on `zig-addon`, not main. `native.zig` contains the implementation and three unit tests. It exports widening arithmetic and a borrowed-buffer function with explicit status values. The jank caller tests scalar arguments, a 64-bit result, and the borrowed-buffer cases below.
 
 ### Borrowed-buffer FFI
 
@@ -3365,7 +3370,7 @@ One interop limitation encountered was
 Default construction followed by `.resize()` expresses the desired allocation
 through supported jank interop without adding a C++ implementation.
 
-`build.zig` builds static and shared Zig libraries. `jank/src/spike/core.jank` is the Clojure caller. `scripts/` contains the reproduction commands. `wasm-probe/` contains isolated C++ callers, target-header probes and the collector test.
+On `zig-addon`, `build.zig` builds static and shared Zig libraries and `jank/src/spike/core.jank` is the Clojure caller; neither is on main. `scripts/` contains the reproduction commands. `wasm-probe/` contains isolated C++ callers, target-header probes and the collector test.
 
 ## Call-graph-aware post-link spill
 
